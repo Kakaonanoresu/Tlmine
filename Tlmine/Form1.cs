@@ -571,43 +571,60 @@ namespace Tlmine
                 
                 // アニメーション用CSS
                 var style = document.createElement('style');
-                style.textContent = `
-                    @keyframes slideDown {{
-                        from {{ transform: translateY(-100%); opacity: 0; }}
-                        to {{ transform: translateY(0); opacity: 1; }}
-                    }}
-                    #tlmine-url-suggestion a {{
-                        color: #fff;
-                        text-decoration: underline;
-                        font-weight: bold;
-                        margin-left: 10px;
-                    }}
-                    #tlmine-url-suggestion a:hover {{
-                        color: #e8f5e8;
-                    }}
-                    #tlmine-close-suggestion {{
-                        background: rgba(255,255,255,0.2);
-                        border: none;
-                        color: white;
-                        padding: 4px 8px;
-                        margin-left: 15px;
-                        border-radius: 3px;
-                        cursor: pointer;
-                        font-size: 12px;
-                    }}
-                    #tlmine-close-suggestion:hover {{
-                        background: rgba(255,255,255,0.3);
-                    }}
-                `;
-                document.head.appendChild(style);
+                if (!document.getElementById('tlmine-suggestion-styles')) {{
+                    style.id = 'tlmine-suggestion-styles';
+                    style.textContent = `
+                        @keyframes slideDown {{
+                            from {{ transform: translateY(-100%); opacity: 0; }}
+                            to {{ transform: translateY(0); opacity: 1; }}
+                        }}
+                        #tlmine-url-suggestion a {{
+                            color: #fff !important;
+                            text-decoration: underline !important;
+                            font-weight: bold !important;
+                            margin-left: 10px !important;
+                            cursor: pointer !important;
+                        }}
+                        #tlmine-url-suggestion a:hover {{
+                            color: #e8f5e8 !important;
+                            background-color: rgba(255,255,255,0.1) !important;
+                            padding: 2px 4px !important;
+                            border-radius: 3px !important;
+                        }}
+                        #tlmine-close-suggestion {{
+                            background: rgba(255,255,255,0.2) !important;
+                            border: none !important;
+                            color: white !important;
+                            padding: 4px 8px !important;
+                            margin-left: 15px !important;
+                            border-radius: 3px !important;
+                            cursor: pointer !important;
+                            font-size: 12px !important;
+                        }}
+                        #tlmine-close-suggestion:hover {{
+                            background: rgba(255,255,255,0.3) !important;
+                        }}
+                    `;
+                    document.head.appendChild(style);
+                }}
                 
                 div.innerHTML = `
                     🌐 このURLをお探しですか？ 
-                    <a href=""javascript:void(0)"" onclick=""window.location.href='{targetUrl}'"" id=""openDirectLink"">{targetUrl}</a>
-                    <button id=""tlmine-close-suggestion"" onclick=""document.getElementById('tlmine-url-suggestion').remove()"">×</button>
+                    <a href=""#"" id=""tlmine-direct-link"">{targetUrl}</a>
+                    <button id=""tlmine-close-suggestion"">×</button>
                 `;
                 
                 document.body.prepend(div);
+                
+                // イベントリスナーを追加
+                document.getElementById('tlmine-direct-link').addEventListener('click', function(e) {{
+                    e.preventDefault();
+                    window.location.href = '{targetUrl}';
+                }});
+                
+                document.getElementById('tlmine-close-suggestion').addEventListener('click', function() {{
+                    document.getElementById('tlmine-url-suggestion').remove();
+                }});
                 
                 // 10秒後に自動で消す
                 setTimeout(function() {{
@@ -664,24 +681,6 @@ namespace Tlmine
                 Margin = new Padding(5, 2, 5, 2)
             };
 
-            var tabBtn = new Button()
-            {
-                Text = "新しいタブ",
-                Width = tabContainer.Width - 30, // 閉じるボタンの分を引く
-                Height = 35,
-                BackColor = Color.FromArgb(70, 70, 70),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Margin = new Padding(0),
-                Tag = browser,
-                Font = new Font("Segoe UI", 9),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(10, 0, 0, 0),
-                Dock = DockStyle.Left
-            };
-            tabBtn.FlatAppearance.BorderSize = 0;
-            tabBtn.Click += TabButton_Click;
-
             // 閉じるボタン
             var closeBtn = new Button()
             {
@@ -695,12 +694,34 @@ namespace Tlmine
                 Tag = browser,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Dock = DockStyle.Right
+                Dock = DockStyle.Right,
+                Name = "closeButton"
             };
             closeBtn.FlatAppearance.BorderSize = 0;
             closeBtn.Click += CloseTabButton_Click;
             closeBtn.MouseEnter += (s, e) => closeBtn.BackColor = Color.FromArgb(200, 70, 70);
             closeBtn.MouseLeave += (s, e) => closeBtn.BackColor = Color.FromArgb(70, 70, 70);
+
+            var tabBtn = new Button()
+            {
+                Text = "新しいタブ",
+                Width = tabContainer.Width - 25, // 閉じるボタンの分を引く
+                Height = 35,
+                BackColor = Color.FromArgb(70, 70, 70),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Margin = new Padding(0),
+                Tag = browser,
+                Font = new Font("Segoe UI", 9),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(5, 0, 5, 0), // パディングを調整
+                Dock = DockStyle.Fill,
+                ImageAlign = ContentAlignment.MiddleLeft,
+                Name = "tabButton",
+                TextImageRelation = TextImageRelation.ImageBeforeText
+            };
+            tabBtn.FlatAppearance.BorderSize = 0;
+            tabBtn.Click += TabButton_Click;
 
             tabContainer.Controls.Add(closeBtn);
             tabContainer.Controls.Add(tabBtn);
@@ -713,6 +734,9 @@ namespace Tlmine
             tabButtons.Add(tabBtn);
 
             SelectTab(browser, tabContainer);
+
+            // デフォルトアイコンを設定
+            CreateDefaultIcon(tabBtn);
         }
 
         private void Browser_AddressChanged(object sender, AddressChangedEventArgs e)
@@ -790,7 +814,7 @@ namespace Tlmine
             }
 
             // タブボタンリストから削除
-            var tabButtonToRemove = tabButtons.FirstOrDefault(btn => btn.Tag == browserToClose);
+            var tabButtonToRemove = tabButtons.FirstOrDefault(btn => btn.Tag == browserToClose && btn.Name == "tabButton");
             if (tabButtonToRemove != null)
             {
                 tabButtons.Remove(tabButtonToRemove);
@@ -818,7 +842,7 @@ namespace Tlmine
         {
             foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
             {
-                var tabButton = container.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browser);
+                var tabButton = container.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browser && btn.Name == "tabButton");
                 if (tabButton != null)
                 {
                     return container;
@@ -831,21 +855,115 @@ namespace Tlmine
         {
             var browser = sender as ChromiumWebBrowser;
             var tabContainer = FindTabContainer(browser);
-            var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browser);
+            var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Name == "tabButton");
 
             if (tabButton != null && !string.IsNullOrEmpty(e.Title))
             {
-                string title = e.Title.Length > 25 ? e.Title.Substring(0, 22) + "..." : e.Title;
+                string title = e.Title.Length > 22 ? e.Title.Substring(0, 19) + "..." : e.Title;
 
                 if (tabButton.InvokeRequired)
                 {
-                    tabButton.Invoke(new Action(() => tabButton.Text = title));
+                    tabButton.Invoke(new Action(() =>
+                    {
+                        tabButton.Text = title;
+                        LoadFavicon(browser, tabButton);
+                    }));
                 }
                 else
                 {
                     tabButton.Text = title;
+                    LoadFavicon(browser, tabButton);
                 }
             }
+        }
+
+        // ファビコンを読み込むメソッド
+        private void LoadFavicon(ChromiumWebBrowser browser, Button tabButton)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(browser.Address))
+                {
+                    var uri = new Uri(browser.Address);
+                    string faviconUrl = $"{uri.Scheme}://{uri.Host}/favicon.ico";
+
+                    // ファビコンを非同期で取得
+                    var webClient = new System.Net.WebClient();
+                    webClient.DownloadDataCompleted += (s, e) =>
+                    {
+                        try
+                        {
+                            if (e.Error == null && e.Result != null && e.Result.Length > 0)
+                            {
+                                using (var ms = new System.IO.MemoryStream(e.Result))
+                                {
+                                    var favicon = Image.FromStream(ms);
+                                    var resizedFavicon = new Bitmap(favicon, new Size(16, 16));
+
+                                    if (tabButton.InvokeRequired)
+                                    {
+                                        tabButton.Invoke(new Action(() =>
+                                        {
+                                            tabButton.Image = resizedFavicon;
+                                        }));
+                                    }
+                                    else
+                                    {
+                                        tabButton.Image = resizedFavicon;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // ファビコンが取得できない場合はデフォルトアイコンを設定
+                                SetDefaultIcon(tabButton);
+                            }
+                        }
+                        catch
+                        {
+                            // エラーが発生した場合はデフォルトアイコンを設定
+                            SetDefaultIcon(tabButton);
+                        }
+                    };
+
+                    webClient.DownloadDataAsync(new Uri(faviconUrl));
+                }
+                else
+                {
+                    SetDefaultIcon(tabButton);
+                }
+            }
+            catch
+            {
+                SetDefaultIcon(tabButton);
+            }
+        }
+
+        // デフォルトアイコンを設定するメソッド
+        private void SetDefaultIcon(Button tabButton)
+        {
+            if (tabButton.InvokeRequired)
+            {
+                tabButton.Invoke(new Action(() => CreateDefaultIcon(tabButton)));
+            }
+            else
+            {
+                CreateDefaultIcon(tabButton);
+            }
+        }
+
+        private void CreateDefaultIcon(Button tabButton)
+        {
+            // シンプルな地球のアイコンを作成
+            var bitmap = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                g.FillEllipse(Brushes.LightBlue, 1, 1, 14, 14);
+                g.DrawEllipse(Pens.DarkBlue, 1, 1, 14, 14);
+                g.DrawEllipse(Pens.Green, 3, 4, 10, 8);
+                g.DrawEllipse(Pens.Green, 5, 2, 6, 4);
+            }
+            tabButton.Image = bitmap;
         }
 
         private void SelectTab(ChromiumWebBrowser browser, Panel tabContainer)
@@ -861,7 +979,11 @@ namespace Tlmine
                 container.BackColor = Color.FromArgb(70, 70, 70);
                 foreach (Button btn in container.Controls.OfType<Button>())
                 {
-                    if (btn.Text != "×") // 閉じるボタン以外
+                    if (btn.Name == "tabButton")
+                    {
+                        btn.BackColor = Color.FromArgb(70, 70, 70);
+                    }
+                    else if (btn.Name == "closeButton")
                     {
                         btn.BackColor = Color.FromArgb(70, 70, 70);
                     }
@@ -875,7 +997,11 @@ namespace Tlmine
             tabContainer.BackColor = Color.FromArgb(100, 100, 100);
             foreach (Button btn in tabContainer.Controls.OfType<Button>())
             {
-                if (btn.Text != "×") // 閉じるボタン以外
+                if (btn.Name == "tabButton")
+                {
+                    btn.BackColor = Color.FromArgb(100, 100, 100);
+                }
+                else if (btn.Name == "closeButton")
                 {
                     btn.BackColor = Color.FromArgb(100, 100, 100);
                 }
