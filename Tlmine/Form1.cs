@@ -6,6 +6,9 @@ using System.Windows.Forms;
 using CefSharp;
 using CefSharp.WinForms;
 using System.Security.Cryptography.X509Certificates;
+using System.IO;
+using System.Text.Json;
+using System.Diagnostics;
 
 namespace Tlmine
 {
@@ -15,21 +18,33 @@ namespace Tlmine
         private FlowLayoutPanel tabButtonsPanel;
         private Panel bookmarksPanel;
         private Panel extensionsPanel;
+        private Panel bookmarksContent;
+        private Panel extensionsContent;
         private TextBox searchBar;
         private Panel searchBarPanel;
         private Button addTabButton;
         private Button backButton;
         private Button forwardButton;
         private Button reloadButton;
+        private ProgressBar downloadProgressBar;
+        private Label downloadLabel;
+        private Panel downloadPanel;
 
         private List<ChromiumWebBrowser> browsers = new List<ChromiumWebBrowser>();
         private List<Button> tabButtons = new List<Button>();
+        private List<BookmarkItem> bookmarks = new List<BookmarkItem>();
+        private List<ExtensionItem> extensions = new List<ExtensionItem>();
+        private Dictionary<ChromiumWebBrowser, string> browserTitles = new Dictionary<ChromiumWebBrowser, string>();
 
         private const string searchBarPlaceholder = "検索またはURLを入力";
+        private const string bookmarksFilePath = "bookmarks.json";
+        private const string extensionsFilePath = "extensions.json";
 
         public Form1()
         {
             InitializeComponent();
+            LoadBookmarks();
+            LoadExtensions();
             InitializeUI();
             InitializeChromium();
             AddNewTab("https://www.google.com");
@@ -133,37 +148,147 @@ namespace Tlmine
             };
             bookmarksPanel.Controls.Add(bmHeader);
 
-            Panel bmContent = new Panel()
+            bookmarksContent = new Panel()
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(70, 70, 74),
-                Visible = true
+                Visible = true,
+                AutoScroll = true
             };
-            bookmarksPanel.Controls.Add(bmContent);
+            bookmarksPanel.Controls.Add(bookmarksContent);
 
-            bmContent.SendToBack();
+            bookmarksContent.SendToBack();
             bmHeader.BringToFront();
 
             bmHeader.Click += (s, e) =>
             {
-                bmContent.Visible = !bmContent.Visible;
-                bookmarksPanel.Height = bmContent.Visible ? 150 : 32;
-                bmHeader.Text = bmContent.Visible ? "Bookmarks ▼" : "Bookmarks ▶";
+                bookmarksContent.Visible = !bookmarksContent.Visible;
+                bookmarksPanel.Height = bookmarksContent.Visible ? 150 : 32;
+                bmHeader.Text = bookmarksContent.Visible ? "Bookmarks ▼" : "Bookmarks ▶";
             };
 
-            var bmExampleLink = new LinkLabel()
+            // ブックマーク追加ボタン
+            var addBookmarkBtn = new Button()
             {
-                Text = "Google",
-                LinkColor = Color.LightBlue,
-                Dock = DockStyle.Top,
+                Text = "+ ブックマーク追加",
                 Height = 25,
-                Padding = new Padding(5)
+                Width = bookmarksContent.Width - 10,
+                BackColor = Color.FromArgb(90, 90, 90),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8),
+                Top = 5,
+                Left = 5
             };
-            bmExampleLink.LinkClicked += (s, e) =>
+            addBookmarkBtn.FlatAppearance.BorderSize = 0;
+            addBookmarkBtn.Click += AddBookmarkBtn_Click;
+            bookmarksContent.Controls.Add(addBookmarkBtn);
+
+            RefreshBookmarksList();
+        }
+
+        private void AddBookmarkBtn_Click(object sender, EventArgs e)
+        {
+            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
+            if (currentBrowser != null)
             {
-                AddNewTab("https://www.google.com");
-            };
-            bmContent.Controls.Add(bmExampleLink);
+                // 保存されたタイトルまたはタブボタンのテキストを使用
+                string title = "新しいブックマーク";
+
+                if (browserTitles.ContainsKey(currentBrowser) && !string.IsNullOrEmpty(browserTitles[currentBrowser]))
+                {
+                    title = browserTitles[currentBrowser];
+                }
+                else
+                {
+                    var tabContainer = FindTabContainer(currentBrowser);
+                    var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Name == "tabButton");
+                    if (tabButton != null && !string.IsNullOrEmpty(tabButton.Text) && tabButton.Text != "新しいタブ")
+                    {
+                        title = tabButton.Text.Replace("...", ""); // 省略記号を削除
+                    }
+                }
+
+                var dialog = new BookmarkDialog(currentBrowser.Address, title);
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    var bookmark = new BookmarkItem
+                    {
+                        Title = dialog.BookmarkTitle,
+                        Url = dialog.BookmarkUrl
+                    };
+                    bookmarks.Add(bookmark);
+                    SaveBookmarks();
+                    RefreshBookmarksList();
+                }
+            }
+        }
+
+        private void RefreshBookmarksList()
+        {
+            // 既存のブックマークリンクを削除（追加ボタンは残す）
+            var controlsToRemove = bookmarksContent.Controls.OfType<Control>()
+                .Where(c => c.Tag?.ToString() == "bookmark").ToList();
+            foreach (var control in controlsToRemove)
+            {
+                bookmarksContent.Controls.Remove(control);
+                control.Dispose();
+            }
+
+            int yPos = 35; // 追加ボタンの下から開始
+            foreach (var bookmark in bookmarks)
+            {
+                var panel = new Panel()
+                {
+                    Width = bookmarksContent.Width - 15,
+                    Height = 25,
+                    Top = yPos,
+                    Left = 5,
+                    Tag = "bookmark"
+                };
+
+                var linkLabel = new LinkLabel()
+                {
+                    Text = bookmark.Title.Length > 20 ? bookmark.Title.Substring(0, 17) + "..." : bookmark.Title,
+                    LinkColor = Color.LightBlue,
+                    Width = panel.Width - 25,
+                    Height = 25,
+                    Left = 0,
+                    Top = 0,
+                    Tag = bookmark.Url
+                };
+                linkLabel.LinkClicked += (s, e) =>
+                {
+                    AddNewTab(linkLabel.Tag.ToString());
+                };
+
+                var deleteBtn = new Button()
+                {
+                    Text = "×",
+                    Width = 20,
+                    Height = 20,
+                    Left = panel.Width - 25,
+                    Top = 2,
+                    BackColor = Color.FromArgb(200, 70, 70),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 8),
+                    Tag = bookmark
+                };
+                deleteBtn.FlatAppearance.BorderSize = 0;
+                deleteBtn.Click += (s, e) =>
+                {
+                    bookmarks.Remove((BookmarkItem)deleteBtn.Tag);
+                    SaveBookmarks();
+                    RefreshBookmarksList();
+                };
+
+                panel.Controls.Add(linkLabel);
+                panel.Controls.Add(deleteBtn);
+                bookmarksContent.Controls.Add(panel);
+
+                yPos += 30;
+            }
         }
 
         private void InitializeExtensionsPanel()
@@ -189,34 +314,128 @@ namespace Tlmine
             };
             extensionsPanel.Controls.Add(extHeader);
 
-            Panel extContent = new Panel()
+            extensionsContent = new Panel()
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(70, 70, 74),
-                Visible = true
+                Visible = true,
+                AutoScroll = true
             };
-            extensionsPanel.Controls.Add(extContent);
+            extensionsPanel.Controls.Add(extensionsContent);
 
-            extContent.SendToBack();
+            extensionsContent.SendToBack();
             extHeader.BringToFront();
 
             extHeader.Click += (s, e) =>
             {
-                extContent.Visible = !extContent.Visible;
-                extensionsPanel.Height = extContent.Visible ? 150 : 32;
-                extHeader.Text = extContent.Visible ? "Extensions ▼" : "Extensions ▶";
+                extensionsContent.Visible = !extensionsContent.Visible;
+                extensionsPanel.Height = extensionsContent.Visible ? 150 : 32;
+                extHeader.Text = extensionsContent.Visible ? "Extensions ▼" : "Extensions ▶";
             };
 
-            var extExample = new Label()
+            // Chrome Web Store ボタン
+            var webStoreBtn = new Button()
             {
-                Text = "AdBlocker",
-                ForeColor = Color.LightGray,
-                Dock = DockStyle.Top,
+                Text = "Chrome Web Store",
                 Height = 25,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Padding = new Padding(5)
+                Width = extensionsContent.Width - 10,
+                BackColor = Color.FromArgb(90, 90, 90),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8),
+                Top = 5,
+                Left = 5
             };
-            extContent.Controls.Add(extExample);
+            webStoreBtn.FlatAppearance.BorderSize = 0;
+            webStoreBtn.Click += (s, e) => AddNewTab("https://chromewebstore.google.com/");
+            extensionsContent.Controls.Add(webStoreBtn);
+
+            RefreshExtensionsList();
+        }
+
+        private void RefreshExtensionsList()
+        {
+            // 既存の拡張機能リストを削除（Web Storeボタンは残す）
+            var controlsToRemove = extensionsContent.Controls.OfType<Control>()
+                .Where(c => c.Tag?.ToString() == "extension").ToList();
+            foreach (var control in controlsToRemove)
+            {
+                extensionsContent.Controls.Remove(control);
+                control.Dispose();
+            }
+
+            int yPos = 35; // Web Storeボタンの下から開始
+            foreach (var extension in extensions)
+            {
+                var panel = new Panel()
+                {
+                    Width = extensionsContent.Width - 15,
+                    Height = 25,
+                    Top = yPos,
+                    Left = 5,
+                    Tag = "extension"
+                };
+
+                var label = new Label()
+                {
+                    Text = extension.Name.Length > 18 ? extension.Name.Substring(0, 15) + "..." : extension.Name,
+                    ForeColor = Color.LightGray,
+                    Width = panel.Width - 45,
+                    Height = 25,
+                    Left = 0,
+                    Top = 0
+                };
+
+                var toggleBtn = new Button()
+                {
+                    Text = extension.Enabled ? "ON" : "OFF",
+                    Width = 30,
+                    Height = 20,
+                    Left = panel.Width - 50,
+                    Top = 2,
+                    BackColor = extension.Enabled ? Color.Green : Color.Gray,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 7),
+                    Tag = extension
+                };
+                toggleBtn.FlatAppearance.BorderSize = 0;
+                toggleBtn.Click += (s, e) =>
+                {
+                    extension.Enabled = !extension.Enabled;
+                    toggleBtn.Text = extension.Enabled ? "ON" : "OFF";
+                    toggleBtn.BackColor = extension.Enabled ? Color.Green : Color.Gray;
+                    SaveExtensions();
+                };
+
+                var deleteBtn = new Button()
+                {
+                    Text = "×",
+                    Width = 15,
+                    Height = 20,
+                    Left = panel.Width - 20,
+                    Top = 2,
+                    BackColor = Color.FromArgb(200, 70, 70),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 7),
+                    Tag = extension
+                };
+                deleteBtn.FlatAppearance.BorderSize = 0;
+                deleteBtn.Click += (s, e) =>
+                {
+                    extensions.Remove((ExtensionItem)deleteBtn.Tag);
+                    SaveExtensions();
+                    RefreshExtensionsList();
+                };
+
+                panel.Controls.Add(label);
+                panel.Controls.Add(toggleBtn);
+                panel.Controls.Add(deleteBtn);
+                extensionsContent.Controls.Add(panel);
+
+                yPos += 30;
+            }
         }
 
         private void InitializeSearchBar()
@@ -230,6 +449,37 @@ namespace Tlmine
             };
             this.Controls.Add(searchBarPanel);
 
+            // ダウンロード進捗パネル
+            downloadPanel = new Panel()
+            {
+                Width = 200,
+                Height = 28,
+                BackColor = Color.FromArgb(240, 240, 240),
+                Visible = false
+            };
+
+            downloadProgressBar = new ProgressBar()
+            {
+                Width = 150,
+                Height = 20,
+                Left = 5,
+                Top = 4,
+                Style = ProgressBarStyle.Continuous
+            };
+
+            downloadLabel = new Label()
+            {
+                Width = 40,
+                Height = 20,
+                Left = 160,
+                Top = 6,
+                Font = new Font("Segoe UI", 8),
+                Text = "0%"
+            };
+
+            downloadPanel.Controls.Add(downloadProgressBar);
+            downloadPanel.Controls.Add(downloadLabel);
+
             // ナビゲーションボタンパネル
             var navigationPanel = new Panel()
             {
@@ -238,6 +488,7 @@ namespace Tlmine
                 BackColor = Color.FromArgb(240, 240, 240),
             };
             searchBarPanel.Controls.Add(navigationPanel);
+            searchBarPanel.Controls.Add(downloadPanel);
 
             // 戻るボタン
             backButton = new Button()
@@ -294,6 +545,10 @@ namespace Tlmine
             reloadButton.FlatAppearance.BorderColor = Color.Gray;
             reloadButton.Click += ReloadButton_Click;
             navigationPanel.Controls.Add(reloadButton);
+
+            // ダウンロードパネルの位置を調整
+            downloadPanel.Left = navigationPanel.Left - downloadPanel.Width - 10;
+            downloadPanel.Top = 4;
 
             searchBar = new TextBox()
             {
@@ -652,6 +907,21 @@ namespace Tlmine
             if (!(Cef.IsInitialized ?? false))
             {
                 var settings = new CefSettings();
+
+                // 動画再生を改善するための設定
+                settings.CefCommandLineArgs.Add("--enable-media-stream");
+                settings.CefCommandLineArgs.Add("--enable-usermedia-screen-capturing");
+                settings.CefCommandLineArgs.Add("--enable-speech-synthesis");
+                settings.CefCommandLineArgs.Add("--enable-web-bluetooth");
+                settings.CefCommandLineArgs.Add("--autoplay-policy", "no-user-gesture-required");
+                settings.CefCommandLineArgs.Add("--disable-features", "VizDisplayCompositor");
+                settings.CefCommandLineArgs.Add("--enable-gpu-rasterization");
+                settings.CefCommandLineArgs.Add("--enable-oop-rasterization");
+                settings.CefCommandLineArgs.Add("--enable-zero-copy");
+
+                // H.264コーデックサポート
+                settings.CefCommandLineArgs.Add("--enable-proprietary-codecs");
+
                 Cef.Initialize(settings);
             }
         }
@@ -662,7 +932,8 @@ namespace Tlmine
             {
                 Dock = DockStyle.Fill,
                 Visible = false,
-                RequestHandler = new CustomRequestHandler(this)
+                RequestHandler = new CustomRequestHandler(this),
+                DownloadHandler = new CustomDownloadHandler(this)
             };
 
             browser.FrameLoadEnd += Browser_FrameLoadEnd;
@@ -820,6 +1091,12 @@ namespace Tlmine
                 tabButtons.Remove(tabButtonToRemove);
             }
 
+            // タイトル辞書からも削除
+            if (browserTitles.ContainsKey(browserToClose))
+            {
+                browserTitles.Remove(browserToClose);
+            }
+
             // ブラウザを削除
             browsers.Remove(browserToClose);
             this.Controls.Remove(browserToClose);
@@ -859,6 +1136,9 @@ namespace Tlmine
 
             if (tabButton != null && !string.IsNullOrEmpty(e.Title))
             {
+                // フルタイトルを辞書に保存
+                browserTitles[browser] = e.Title;
+
                 string title = e.Title.Length > 22 ? e.Title.Substring(0, 19) + "..." : e.Title;
 
                 if (tabButton.InvokeRequired)
@@ -1027,6 +1307,113 @@ namespace Tlmine
             AddNewTab(url);
         }
 
+        // ダウンロード進捗を更新するメソッド
+        public void UpdateDownloadProgress(int percentage, string fileName)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() =>
+                {
+                    downloadPanel.Visible = true;
+                    downloadProgressBar.Value = Math.Min(100, Math.Max(0, percentage));
+                    downloadLabel.Text = $"{percentage}%";
+                }));
+            }
+            else
+            {
+                downloadPanel.Visible = true;
+                downloadProgressBar.Value = Math.Min(100, Math.Max(0, percentage));
+                downloadLabel.Text = $"{percentage}%";
+            }
+        }
+
+        // ダウンロード完了時にプログレスバーを非表示にする
+        public void HideDownloadProgress()
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() =>
+                {
+                    downloadPanel.Visible = false;
+                }));
+            }
+            else
+            {
+                downloadPanel.Visible = false;
+            }
+        }
+
+        // ブックマークの保存・読み込み
+        private void SaveBookmarks()
+        {
+            try
+            {
+                var json = JsonSerializer.Serialize(bookmarks, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(bookmarksFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"ブックマークの保存に失敗しました: {ex.Message}");
+            }
+        }
+
+        private void LoadBookmarks()
+        {
+            try
+            {
+                if (File.Exists(bookmarksFilePath))
+                {
+                    var json = File.ReadAllText(bookmarksFilePath);
+                    bookmarks = JsonSerializer.Deserialize<List<BookmarkItem>>(json) ?? new List<BookmarkItem>();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"ブックマークの読み込みに失敗しました: {ex.Message}");
+                bookmarks = new List<BookmarkItem>();
+            }
+        }
+
+        // 拡張機能の保存・読み込み
+        private void SaveExtensions()
+        {
+            try
+            {
+                var json = JsonSerializer.Serialize(extensions, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(extensionsFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"拡張機能の保存に失敗しました: {ex.Message}");
+            }
+        }
+
+        private void LoadExtensions()
+        {
+            try
+            {
+                if (File.Exists(extensionsFilePath))
+                {
+                    var json = File.ReadAllText(extensionsFilePath);
+                    extensions = JsonSerializer.Deserialize<List<ExtensionItem>>(json) ?? new List<ExtensionItem>();
+                }
+                else
+                {
+                    // デフォルトの拡張機能例
+                    extensions = new List<ExtensionItem>
+                    {
+                        new ExtensionItem { Name = "AdBlocker", Enabled = true },
+                        new ExtensionItem { Name = "Password Manager", Enabled = false }
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"拡張機能の読み込みに失敗しました: {ex.Message}");
+                extensions = new List<ExtensionItem>();
+            }
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             foreach (var browser in browsers)
@@ -1138,6 +1525,88 @@ namespace Tlmine
             public void OnRenderViewReady(IWebBrowser chromiumWebBrowser, IBrowser browser) { }
         }
 
+        // カスタムダウンロードハンドラー
+        private class CustomDownloadHandler : IDownloadHandler
+        {
+            private readonly Form1 form;
+
+            public CustomDownloadHandler(Form1 form)
+            {
+                this.form = form;
+            }
+
+            public bool CanDownload(IWebBrowser chromiumWebBrowser, IBrowser browser, string url, string requestMethod)
+            {
+                return true;
+            }
+
+            public bool OnBeforeDownload(IWebBrowser chromiumWebBrowser, IBrowser browser, DownloadItem downloadItem, IBeforeDownloadCallback callback)
+            {
+                var fileName = downloadItem.SuggestedFileName;
+                var fileSize = downloadItem.TotalBytes > 0 ? $" ({downloadItem.TotalBytes / 1024 / 1024} MB)" : "";
+
+                var result = MessageBox.Show(
+                    $"ファイル '{fileName}'{fileSize} をダウンロードしますか？",
+                    "ダウンロード確認",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    var downloadsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                    var fullPath = Path.Combine(downloadsPath, fileName);
+                    callback.Continue(fullPath, false);
+                    return true;
+                }
+                else
+                {
+                    // ダウンロードをキャンセル
+                    return false;
+                }
+            }
+
+            public void OnDownloadUpdated(IWebBrowser chromiumWebBrowser, IBrowser browser, DownloadItem downloadItem, IDownloadItemCallback callback)
+            {
+                if (downloadItem.IsInProgress)
+                {
+                    var percentage = downloadItem.TotalBytes > 0 ?
+                        (int)((downloadItem.ReceivedBytes * 100) / downloadItem.TotalBytes) : 0;
+                    form.UpdateDownloadProgress(percentage, downloadItem.SuggestedFileName);
+                }
+                else if (downloadItem.IsComplete)
+                {
+                    form.HideDownloadProgress();
+
+                    // ダウンロード完了通知
+                    var result = MessageBox.Show(
+                        $"'{downloadItem.SuggestedFileName}' のダウンロードが完了しました。\nファイルを開きますか？",
+                        "ダウンロード完了",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Information);
+
+                    if (result == DialogResult.Yes)
+                    {
+                        try
+                        {
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = downloadItem.FullPath,
+                                UseShellExecute = true
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"ファイルを開けませんでした: {ex.Message}");
+                        }
+                    }
+                }
+                else if (downloadItem.IsCancelled)
+                {
+                    form.HideDownloadProgress();
+                }
+            }
+        }
+
         private static Dictionary<string, string> ParseQueryString(string query)
         {
             var dict = new Dictionary<string, string>();
@@ -1154,6 +1623,99 @@ namespace Tlmine
                 }
             }
             return dict;
+        }
+    }
+
+    // データクラス
+    public class BookmarkItem
+    {
+        public string Title { get; set; } = "";
+        public string Url { get; set; } = "";
+    }
+
+    public class ExtensionItem
+    {
+        public string Name { get; set; } = "";
+        public bool Enabled { get; set; } = false;
+    }
+
+    // ブックマーク追加ダイアログ
+    public partial class BookmarkDialog : Form
+    {
+        private TextBox titleTextBox;
+        private TextBox urlTextBox;
+        private Button okButton;
+        private Button cancelButton;
+
+        public string BookmarkTitle => titleTextBox.Text;
+        public string BookmarkUrl => urlTextBox.Text;
+
+        public BookmarkDialog(string url, string title)
+        {
+            InitializeDialog();
+            urlTextBox.Text = url ?? "";
+            titleTextBox.Text = title ?? "新しいブックマーク";
+        }
+
+        private void InitializeDialog()
+        {
+            this.Text = "ブックマーク追加";
+            this.Size = new Size(400, 150);
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+
+            var titleLabel = new Label()
+            {
+                Text = "タイトル:",
+                Location = new Point(12, 15),
+                Size = new Size(60, 23)
+            };
+            this.Controls.Add(titleLabel);
+
+            titleTextBox = new TextBox()
+            {
+                Location = new Point(78, 12),
+                Size = new Size(300, 23)
+            };
+            this.Controls.Add(titleTextBox);
+
+            var urlLabel = new Label()
+            {
+                Text = "URL:",
+                Location = new Point(12, 44),
+                Size = new Size(60, 23)
+            };
+            this.Controls.Add(urlLabel);
+
+            urlTextBox = new TextBox()
+            {
+                Location = new Point(78, 41),
+                Size = new Size(300, 23)
+            };
+            this.Controls.Add(urlTextBox);
+
+            okButton = new Button()
+            {
+                Text = "OK",
+                Location = new Point(222, 80),
+                Size = new Size(75, 23),
+                DialogResult = DialogResult.OK
+            };
+            this.Controls.Add(okButton);
+
+            cancelButton = new Button()
+            {
+                Text = "キャンセル",
+                Location = new Point(303, 80),
+                Size = new Size(75, 23),
+                DialogResult = DialogResult.Cancel
+            };
+            this.Controls.Add(cancelButton);
+
+            this.AcceptButton = okButton;
+            this.CancelButton = cancelButton;
         }
     }
 }
