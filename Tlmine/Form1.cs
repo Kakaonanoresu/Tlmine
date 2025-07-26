@@ -360,6 +360,7 @@ namespace Tlmine
                 if (string.IsNullOrEmpty(text) || text == searchBarPlaceholder) return;
 
                 string url = "";
+                string suggestedUrl = "";
 
                 // URLかどうか判定を改善
                 if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
@@ -377,26 +378,75 @@ namespace Tlmine
                 {
                     // それ以外は検索クエリとして扱う
                     url = $"https://www.google.com/search?q={Uri.EscapeDataString(text)}";
-                }
 
-                if (url.Contains("example")) // 任意条件で変えてください
-                {
-                    ShowUrlSuggestion("https://www.example.com");
-                }
-                else
-                {
-                    ClearUrlSuggestion();
+                    // 検索クエリに対してURL提案を行う
+                    suggestedUrl = GetUrlSuggestion(text);
                 }
 
                 var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
                 if (currentBrowser != null)
                 {
                     currentBrowser.Load(url);
+
+                    // URL提案がある場合は表示
+                    if (!string.IsNullOrEmpty(suggestedUrl))
+                    {
+                        // ページ読み込み後に提案を表示するため、少し遅延させる
+                        var timer = new System.Windows.Forms.Timer();
+                        timer.Interval = 1500; // 1.5秒後に表示
+                        timer.Tick += (s, args) =>
+                        {
+                            ShowUrlSuggestion(suggestedUrl);
+                            timer.Stop();
+                            timer.Dispose();
+                        };
+                        timer.Start();
+                    }
+                    else
+                    {
+                        ClearUrlSuggestion();
+                    }
                 }
 
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+        }
+
+        // URL提案を取得するメソッド
+        private string GetUrlSuggestion(string searchQuery)
+        {
+            var query = searchQuery.ToLower();
+
+            // よくある検索クエリに対するURL提案
+            var suggestions = new Dictionary<string, string>
+            {
+                {"youtube", "https://www.youtube.com"},
+                {"twitter", "https://twitter.com"},
+                {"facebook", "https://www.facebook.com"},
+                {"instagram", "https://www.instagram.com"},
+                {"github", "https://github.com"},
+                {"stackoverflow", "https://stackoverflow.com"},
+                {"amazon", "https://www.amazon.co.jp"},
+                {"楽天", "https://www.rakuten.co.jp"},
+                {"yahoo", "https://www.yahoo.co.jp"},
+                {"ニコニコ", "https://www.nicovideo.jp"},
+                {"ニコニコ動画", "https://www.nicovideo.jp"},
+                {"wikipedia", "https://ja.wikipedia.org"},
+                {"ウィキペディア", "https://ja.wikipedia.org"},
+                {"gmail", "https://mail.google.com"},
+                {"outlook", "https://outlook.com"}
+            };
+
+            foreach (var suggestion in suggestions)
+            {
+                if (query.Contains(suggestion.Key))
+                {
+                    return suggestion.Value;
+                }
+            }
+
+            return "";
         }
 
         // ナビゲーションボタンのイベントハンドラー
@@ -495,14 +545,80 @@ namespace Tlmine
         private void ShowUrlSuggestion(string targetUrl)
         {
             string script = $@"
-                if (!document.getElementById('tlmine-url-suggestion')) {{
-                    var div = document.createElement('div');
-                    div.id = 'tlmine-url-suggestion';
-                    div.style = 'padding:10px; background:#ff0; border:1px solid #aaa; font-family:sans-serif; position:fixed; top:0; left:0; width:100%; z-index:9999; text-align:center;';
-                    div.innerHTML = 'このURLをお探しですか？ <a href=""tlmine://openNewTab?url={targetUrl}"" id=""openNewTabLink"">{targetUrl}</a>';
-                    document.body.prepend(div);
-                }}
+                // 既存の提案があれば削除
+                var existing = document.getElementById('tlmine-url-suggestion');
+                if (existing) existing.remove();
+                
+                // 新しい提案バーを作成
+                var div = document.createElement('div');
+                div.id = 'tlmine-url-suggestion';
+                div.style.cssText = `
+                    padding: 12px 20px;
+                    background: linear-gradient(135deg, #4CAF50, #45a049);
+                    border: none;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 14px;
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    z-index: 99999;
+                    text-align: center;
+                    color: white;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                    animation: slideDown 0.3s ease-out;
+                `;
+                
+                // アニメーション用CSS
+                var style = document.createElement('style');
+                style.textContent = `
+                    @keyframes slideDown {{
+                        from {{ transform: translateY(-100%); opacity: 0; }}
+                        to {{ transform: translateY(0); opacity: 1; }}
+                    }}
+                    #tlmine-url-suggestion a {{
+                        color: #fff;
+                        text-decoration: underline;
+                        font-weight: bold;
+                        margin-left: 10px;
+                    }}
+                    #tlmine-url-suggestion a:hover {{
+                        color: #e8f5e8;
+                    }}
+                    #tlmine-close-suggestion {{
+                        background: rgba(255,255,255,0.2);
+                        border: none;
+                        color: white;
+                        padding: 4px 8px;
+                        margin-left: 15px;
+                        border-radius: 3px;
+                        cursor: pointer;
+                        font-size: 12px;
+                    }}
+                    #tlmine-close-suggestion:hover {{
+                        background: rgba(255,255,255,0.3);
+                    }}
+                `;
+                document.head.appendChild(style);
+                
+                div.innerHTML = `
+                    🌐 このURLをお探しですか？ 
+                    <a href=""javascript:void(0)"" onclick=""window.location.href='{targetUrl}'"" id=""openDirectLink"">{targetUrl}</a>
+                    <button id=""tlmine-close-suggestion"" onclick=""document.getElementById('tlmine-url-suggestion').remove()"">×</button>
+                `;
+                
+                document.body.prepend(div);
+                
+                // 10秒後に自動で消す
+                setTimeout(function() {{
+                    var suggestion = document.getElementById('tlmine-url-suggestion');
+                    if (suggestion) {{
+                        suggestion.style.animation = 'slideDown 0.3s ease-out reverse';
+                        setTimeout(() => suggestion.remove(), 300);
+                    }}
+                }}, 10000);
             ";
+
             var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
             currentBrowser?.ExecuteScriptAsync(script);
         }
@@ -539,27 +655,64 @@ namespace Tlmine
             browsers.Add(browser);
             this.Controls.Add(browser);
 
+            // タブコンテナパネル（タブボタンと閉じるボタンを含む）
+            var tabContainer = new Panel()
+            {
+                Width = tabButtonsPanel.Width - 20,
+                Height = 35,
+                BackColor = Color.FromArgb(70, 70, 70),
+                Margin = new Padding(5, 2, 5, 2)
+            };
+
             var tabBtn = new Button()
             {
                 Text = "新しいタブ",
-                AutoSize = true,
-                Height = 30,
+                Width = tabContainer.Width - 30, // 閉じるボタンの分を引く
+                Height = 35,
                 BackColor = Color.FromArgb(70, 70, 70),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Margin = new Padding(3),
-                Tag = browser
+                Margin = new Padding(0),
+                Tag = browser,
+                Font = new Font("Segoe UI", 9),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 0, 0),
+                Dock = DockStyle.Left
             };
             tabBtn.FlatAppearance.BorderSize = 0;
             tabBtn.Click += TabButton_Click;
 
+            // 閉じるボタン
+            var closeBtn = new Button()
+            {
+                Text = "×",
+                Width = 25,
+                Height = 35,
+                BackColor = Color.FromArgb(70, 70, 70),
+                ForeColor = Color.LightGray,
+                FlatStyle = FlatStyle.Flat,
+                Margin = new Padding(0),
+                Tag = browser,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Dock = DockStyle.Right
+            };
+            closeBtn.FlatAppearance.BorderSize = 0;
+            closeBtn.Click += CloseTabButton_Click;
+            closeBtn.MouseEnter += (s, e) => closeBtn.BackColor = Color.FromArgb(200, 70, 70);
+            closeBtn.MouseLeave += (s, e) => closeBtn.BackColor = Color.FromArgb(70, 70, 70);
+
+            tabContainer.Controls.Add(closeBtn);
+            tabContainer.Controls.Add(tabBtn);
+
+            // 新規タブ追加ボタンの前に挿入
             var addButtonIndex = tabButtonsPanel.Controls.IndexOf(addTabButton);
-            tabButtonsPanel.Controls.Add(tabBtn);
-            tabButtonsPanel.Controls.SetChildIndex(tabBtn, addButtonIndex);
+            tabButtonsPanel.Controls.Add(tabContainer);
+            tabButtonsPanel.Controls.SetChildIndex(tabContainer, addButtonIndex);
 
             tabButtons.Add(tabBtn);
 
-            SelectTab(browser, tabBtn);
+            SelectTab(browser, tabContainer);
         }
 
         private void Browser_AddressChanged(object sender, AddressChangedEventArgs e)
@@ -588,18 +741,101 @@ namespace Tlmine
 
             if (associatedBrowser != null)
             {
-                SelectTab(associatedBrowser, clickedButton);
+                var tabContainer = clickedButton.Parent as Panel;
+                SelectTab(associatedBrowser, tabContainer);
             }
+        }
+
+        // タブ閉じるボタンのイベントハンドラー
+        private void CloseTabButton_Click(object sender, EventArgs e)
+        {
+            var closeButton = sender as Button;
+            var associatedBrowser = closeButton?.Tag as ChromiumWebBrowser;
+
+            if (associatedBrowser != null)
+            {
+                CloseTab(associatedBrowser);
+            }
+        }
+
+        // タブを閉じるメソッド
+        private void CloseTab(ChromiumWebBrowser browserToClose)
+        {
+            // 最後のタブは閉じさせない
+            if (browsers.Count <= 1)
+            {
+                MessageBox.Show("最後のタブは閉じることができません。", "情報", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // 閉じるタブが現在選択されているかどうか
+            bool wasSelected = browserToClose.Visible;
+
+            // タブボタンとコンテナを見つけて削除
+            Panel tabContainerToRemove = null;
+            foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
+            {
+                var tabButton = container.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browserToClose);
+                if (tabButton != null)
+                {
+                    tabContainerToRemove = container;
+                    break;
+                }
+            }
+
+            if (tabContainerToRemove != null)
+            {
+                tabButtonsPanel.Controls.Remove(tabContainerToRemove);
+                tabContainerToRemove.Dispose();
+            }
+
+            // タブボタンリストから削除
+            var tabButtonToRemove = tabButtons.FirstOrDefault(btn => btn.Tag == browserToClose);
+            if (tabButtonToRemove != null)
+            {
+                tabButtons.Remove(tabButtonToRemove);
+            }
+
+            // ブラウザを削除
+            browsers.Remove(browserToClose);
+            this.Controls.Remove(browserToClose);
+            browserToClose.Dispose();
+
+            // 閉じたタブが選択されていた場合、別のタブを選択
+            if (wasSelected && browsers.Count > 0)
+            {
+                var nextBrowser = browsers.Last(); // 最後のタブを選択
+                var nextTabContainer = FindTabContainer(nextBrowser);
+                if (nextTabContainer != null)
+                {
+                    SelectTab(nextBrowser, nextTabContainer);
+                }
+            }
+        }
+
+        // ブラウザに対応するタブコンテナを見つけるヘルパーメソッド
+        private Panel FindTabContainer(ChromiumWebBrowser browser)
+        {
+            foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
+            {
+                var tabButton = container.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browser);
+                if (tabButton != null)
+                {
+                    return container;
+                }
+            }
+            return null;
         }
 
         private void Browser_TitleChanged(object sender, TitleChangedEventArgs e)
         {
             var browser = sender as ChromiumWebBrowser;
-            var tabButton = tabButtons.FirstOrDefault(btn => btn.Tag == browser);
+            var tabContainer = FindTabContainer(browser);
+            var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browser);
 
             if (tabButton != null && !string.IsNullOrEmpty(e.Title))
             {
-                string title = e.Title.Length > 20 ? e.Title.Substring(0, 17) + "..." : e.Title;
+                string title = e.Title.Length > 25 ? e.Title.Substring(0, 22) + "..." : e.Title;
 
                 if (tabButton.InvokeRequired)
                 {
@@ -612,20 +848,38 @@ namespace Tlmine
             }
         }
 
-        private void SelectTab(ChromiumWebBrowser browser, Button tabButton)
+        private void SelectTab(ChromiumWebBrowser browser, Panel tabContainer)
         {
             foreach (var b in browsers)
             {
                 b.Visible = false;
             }
-            foreach (var btn in tabButtons)
+
+            // すべてのタブコンテナの色をリセット
+            foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
             {
-                btn.BackColor = Color.FromArgb(70, 70, 70);
+                container.BackColor = Color.FromArgb(70, 70, 70);
+                foreach (Button btn in container.Controls.OfType<Button>())
+                {
+                    if (btn.Text != "×") // 閉じるボタン以外
+                    {
+                        btn.BackColor = Color.FromArgb(70, 70, 70);
+                    }
+                }
             }
 
             browser.Visible = true;
             browser.BringToFront();
-            tabButton.BackColor = Color.FromArgb(100, 100, 100);
+
+            // 選択されたタブコンテナの色を変更
+            tabContainer.BackColor = Color.FromArgb(100, 100, 100);
+            foreach (Button btn in tabContainer.Controls.OfType<Button>())
+            {
+                if (btn.Text != "×") // 閉じるボタン以外
+                {
+                    btn.BackColor = Color.FromArgb(100, 100, 100);
+                }
+            }
 
             // タブを切り替えた時に検索バーのURLを更新
             UpdateSearchBarUrl();
