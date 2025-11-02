@@ -332,17 +332,34 @@ namespace Tlmine
                     {
                         try
                         {
-                            var newExt = new ExtensionItem
+                            var scriptContent = File.ReadAllText(dialog.FileName);
+
+                            // ⭐ セキュリティ警告を表示
+                            var result = MessageBox.Show(
+                                $"⚠️ セキュリティ警告\n\n" +
+                                $"拡張機能 '{Path.GetFileNameWithoutExtension(dialog.FileName)}' を追加しようとしています。\n\n" +
+                                "拡張機能は任意のJavaScriptコードを実行できるため、\n" +
+                                "信頼できない送信元からのファイルは危険です。\n\n" +
+                                "このファイルを信頼して追加しますか？",
+                                "確認",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Warning
+                            );
+
+                            if (result == DialogResult.Yes)
                             {
-                                Name = Path.GetFileNameWithoutExtension(dialog.FileName),
-                                Enabled = true,
-                                ScriptPath = dialog.FileName,
-                                ScriptContent = File.ReadAllText(dialog.FileName)
-                            };
-                            extensions.Add(newExt);
-                            SaveExtensions();
-                            RefreshExtensionsList();
-                            MessageBox.Show($"拡張機能 '{newExt.Name}' を追加しました。", "成功");
+                                var newExt = new ExtensionItem
+                                {
+                                    Name = Path.GetFileNameWithoutExtension(dialog.FileName),
+                                    Enabled = true,
+                                    ScriptPath = dialog.FileName,
+                                    ScriptContent = scriptContent
+                                };
+                                extensions.Add(newExt);
+                                SaveExtensions();
+                                RefreshExtensionsList();
+                                MessageBox.Show($"拡張機能 '{newExt.Name}' を追加しました。", "成功");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -755,6 +772,30 @@ namespace Tlmine
             return false;
         }
 
+        // ⭐ セキュリティ: URL検証メソッド
+        private bool IsValidUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+
+            // httpまたはhttpsのみ許可
+            if (!url.StartsWith("http://") && !url.StartsWith("https://"))
+                return false;
+
+            try
+            {
+                var uri = new Uri(url);
+                // ローカルホストやファイルプロトコルをブロック
+                if (uri.IsLoopback || uri.IsFile)
+                    return false;
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private async Task ShowUrlSuggestion(string targetUrl)
         {
             var browser = browsers.FirstOrDefault(b => b.Visible);
@@ -1139,6 +1180,7 @@ namespace Tlmine
             base.OnFormClosing(e);
         }
 
+        // ⭐ セキュリティ強化: CustomRequestHandler
         private class CustomRequestHandler : IRequestHandler
         {
             private readonly Form1 form;
@@ -1148,18 +1190,95 @@ namespace Tlmine
             {
                 if (request.Url.StartsWith("tlmine://openNewTab"))
                 {
+                    // ⭐ ユーザーの明示的な操作かチェック
+                    if (!userGesture)
+                    {
+                        Debug.WriteLine("自動実行された tlmine:// プロトコルをブロックしました");
+                        return true; // ブロック
+                    }
+
                     var uri = new Uri(request.Url);
-                    var query = uri.Query.TrimStart('?').Split('&').Select(p => p.Split('=')).Where(p => p.Length == 2).ToDictionary(p => Uri.UnescapeDataString(p[0]), p => Uri.UnescapeDataString(p[1]));
-                    form.Invoke(new Action(() => form.AddNewTabFromUrl(query.ContainsKey("url") ? query["url"] : "https://www.google.com")));
+                    var query = uri.Query.TrimStart('?').Split('&')
+                        .Select(p => p.Split('=')).Where(p => p.Length == 2)
+                        .ToDictionary(p => Uri.UnescapeDataString(p[0]), p => Uri.UnescapeDataString(p[1]));
+
+                    if (query.ContainsKey("url"))
+                    {
+                        string targetUrl = query["url"];
+
+                        // ⭐ URLの検証
+                        if (!form.IsValidUrl(targetUrl))
+                        {
+                            form.Invoke(new Action(() =>
+                                MessageBox.Show("無効または危険なURLです。", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+                            ));
+                            return true;
+                        }
+
+                        // ⭐ 確認ダイアログを表示
+                        var result = DialogResult.No;
+                        form.Invoke(new Action(() =>
+                        {
+                            result = MessageBox.Show(
+                                $"以下のURLを新しいタブで開きますか？\n\n{targetUrl}",
+                                "確認",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Question);
+                        }));
+
+                        if (result == DialogResult.Yes)
+                        {
+                            form.Invoke(new Action(() => form.AddNewTabFromUrl(targetUrl)));
+                        }
+                    }
+                    else
+                    {
+                        form.Invoke(new Action(() => form.AddNewTabFromUrl("https://www.google.com")));
+                    }
                     return true;
                 }
                 return false;
             }
 
             public bool GetAuthCredentials(IWebBrowser w, IBrowser b, string o, bool p, string h, int po, string r, string s, IAuthCallback c) => false;
-            public bool OnCertificateError(IWebBrowser w, IBrowser b, CefErrorCode e, string r, ISslInfo s, IRequestCallback c) => false;
+
+            // ⭐ セキュリティ: SSL証明書エラーの処理
+            public bool OnCertificateError(IWebBrowser w, IBrowser b, CefErrorCode e, string r, ISslInfo s, IRequestCallback c)
+            {
+                // 証明書エラーを検出したら警告を表示
+                form.Invoke(new Action(() =>
+                {
+                    var result = MessageBox.Show(
+                        $"⚠️ セキュリティ警告\n\n" +
+                        $"このサイトのセキュリティ証明書に問題があります。\n" +
+                        $"URL: {r}\n" +
+                        $"エラー: {e}\n\n" +
+                        $"このサイトは安全ではない可能性があります。\n" +
+                        $"続行しますか？（推奨しません）",
+                        "証明書エラー",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning
+                    );
+
+                    if (result == DialogResult.Yes)
+                    {
+                        c.Continue(true);
+                    }
+                    else
+                    {
+                        c.Continue(false);
+                    }
+                }));
+
+                return true; // エラーを処理済みとしてマーク
+            }
+
             public void OnPluginCrashed(IWebBrowser w, IBrowser b, string p) { }
-            public void OnRenderProcessTerminated(IWebBrowser w, IBrowser b, CefTerminationStatus s, int e, string m) { if (form.InvokeRequired) form.Invoke(new Action(() => b.Reload())); }
+            public void OnRenderProcessTerminated(IWebBrowser w, IBrowser b, CefTerminationStatus s, int e, string m)
+            {
+                if (form.InvokeRequired)
+                    form.Invoke(new Action(() => b.Reload()));
+            }
             public void OnDocumentAvailableInMainFrame(IWebBrowser w, IBrowser b) { }
             public bool OnOpenUrlFromTab(IWebBrowser w, IBrowser b, IFrame f, string u, WindowOpenDisposition d, bool g)
             {
@@ -1179,6 +1298,7 @@ namespace Tlmine
             public void OnRenderViewReady(IWebBrowser w, IBrowser b) { }
         }
 
+        // ⭐ セキュリティ強化: CustomDownloadHandler
         private class CustomDownloadHandler : IDownloadHandler
         {
             private readonly Form1 form;
@@ -1205,10 +1325,38 @@ namespace Tlmine
                 {
                     form.HideDownloadProgress();
                     form.AddToDownloadHistory(d.SuggestedFileName, d.FullPath);
-                    if (MessageBox.Show($"'{d.SuggestedFileName}' のダウンロードが完了しました。\nファイルを開きますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
+
+                    // ⭐ セキュリティ: 実行可能ファイルの場合は警告を強化
+                    string ext = Path.GetExtension(d.FullPath).ToLower();
+                    string[] dangerousExts = { ".exe", ".msi", ".bat", ".cmd", ".vbs", ".js", ".ps1", ".scr", ".com", ".pif" };
+
+                    if (dangerousExts.Contains(ext))
                     {
-                        try { Process.Start(new ProcessStartInfo { FileName = d.FullPath, UseShellExecute = true }); }
-                        catch (Exception ex) { MessageBox.Show($"開けませんでした: {ex.Message}"); }
+                        var result = MessageBox.Show(
+                            $"⚠️ セキュリティ警告\n\n" +
+                            $"実行可能ファイル '{d.SuggestedFileName}' のダウンロードが完了しました。\n\n" +
+                            $"このファイルはコンピュータに害を及ぼす可能性があります。\n" +
+                            $"信頼できる送信元からのファイルのみ開いてください。\n\n" +
+                            $"ファイルを開きますか？",
+                            "セキュリティ警告",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning
+                        );
+
+                        if (result == DialogResult.Yes)
+                        {
+                            try { Process.Start(new ProcessStartInfo { FileName = d.FullPath, UseShellExecute = true }); }
+                            catch (Exception ex) { MessageBox.Show($"開けませんでした: {ex.Message}", "エラー"); }
+                        }
+                    }
+                    else
+                    {
+                        // 通常のファイルは既存の処理
+                        if (MessageBox.Show($"'{d.SuggestedFileName}' のダウンロードが完了しました。\nファイルを開きますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                        {
+                            try { Process.Start(new ProcessStartInfo { FileName = d.FullPath, UseShellExecute = true }); }
+                            catch (Exception ex) { MessageBox.Show($"開けませんでした: {ex.Message}", "エラー"); }
+                        }
                     }
                 }
                 else if (d.IsCancelled) form.HideDownloadProgress();
