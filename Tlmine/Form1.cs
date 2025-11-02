@@ -10,23 +10,31 @@ using System.IO;
 using System.Text.Json;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 
 namespace Tlmine
 {
     public partial class Form1 : Form
     {
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
         private FlowLayoutPanel sidePanel;
         private FlowLayoutPanel tabButtonsPanel;
         private Panel bookmarksPanel;
         private Panel extensionsPanel;
+        private Panel downloadHistoryPanel;
         private Panel bookmarksContent;
         private Panel extensionsContent;
+        private Panel downloadHistoryContent;
         private TextBox searchBar;
         private Panel searchBarPanel;
         private Button addTabButton;
         private Button backButton;
         private Button forwardButton;
         private Button reloadButton;
+        private Button addBookmarkButton;
         private ProgressBar downloadProgressBar;
         private Label downloadLabel;
         private Panel downloadPanel;
@@ -35,30 +43,47 @@ namespace Tlmine
         private List<Button> tabButtons = new List<Button>();
         private List<BookmarkItem> bookmarks = new List<BookmarkItem>();
         private List<ExtensionItem> extensions = new List<ExtensionItem>();
+        private List<DownloadHistoryItem> downloadHistory = new List<DownloadHistoryItem>();
         private Dictionary<ChromiumWebBrowser, string> browserTitles = new Dictionary<ChromiumWebBrowser, string>();
 
         private const string searchBarPlaceholder = "検索またはURLを入力";
         private const string bookmarksFilePath = "bookmarks.json";
         private const string extensionsFilePath = "extensions.json";
+        private const string downloadHistoryFilePath = "download_history.json";
 
         public Form1()
         {
             InitializeComponent();
             LoadBookmarks();
             LoadExtensions();
+            LoadDownloadHistory();
             InitializeUI();
             InitializeChromium();
             AddNewTab("https://www.google.com");
         }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            EnableDarkTitleBar();
+        }
+
+        private void EnableDarkTitleBar()
+        {
+            if (this.Handle != IntPtr.Zero)
+            {
+                int darkModeValue = 1;
+                DwmSetWindowAttribute(this.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkModeValue, sizeof(int));
+            }
+        }
+
         private void InitializeUI()
         {
-            this.Text = "Tlmine";
+            this.Text = "Tlmine Browser";
             this.WindowState = FormWindowState.Maximized;
             this.BackColor = Color.FromArgb(32, 33, 36);
             this.Font = new Font("Segoe UI", 9);
 
-            // サイドパネル
             sidePanel = new FlowLayoutPanel()
             {
                 Dock = DockStyle.Left,
@@ -72,8 +97,8 @@ namespace Tlmine
 
             InitializeBookmarksPanel();
             InitializeExtensionsPanel();
+            InitializeDownloadHistoryPanel();
 
-            // タブボタンパネル
             tabButtonsPanel = new FlowLayoutPanel()
             {
                 Height = 200,
@@ -114,14 +139,9 @@ namespace Tlmine
                 Padding = new Padding(10, 0, 0, 0)
             };
             addTabButton.FlatAppearance.BorderSize = 0;
-            addTabButton.Click += AddTabButton_Click;
+            addTabButton.Click += (s, e) => AddNewTab("https://www.google.com");
             tabButtonsPanel.Controls.Add(addTabButton);
             InitializeSearchBar();
-        }
-
-        private void AddTabButton_Click(object sender, EventArgs e)
-        {
-            AddNewTab("https://www.google.com");
         }
 
         private void InitializeBookmarksPanel()
@@ -190,31 +210,13 @@ namespace Tlmine
             var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
             if (currentBrowser != null)
             {
-                string title = "新しいブックマーク";
-
-                if (browserTitles.ContainsKey(currentBrowser) && !string.IsNullOrEmpty(browserTitles[currentBrowser]))
-                {
-                    title = browserTitles[currentBrowser];
-                }
-                else
-                {
-                    var tabContainer = FindTabContainer(currentBrowser);
-                    var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Name == "tabButton");
-                    if (tabButton != null && !string.IsNullOrEmpty(tabButton.Text) && tabButton.Text != "新しいタブ")
-                    {
-                        title = tabButton.Text.Replace("...", "");
-                    }
-                }
+                string title = browserTitles.ContainsKey(currentBrowser) && !string.IsNullOrEmpty(browserTitles[currentBrowser])
+                    ? browserTitles[currentBrowser] : "新しいブックマーク";
 
                 var dialog = new BookmarkDialog(currentBrowser.Address, title);
                 if (dialog.ShowDialog() == DialogResult.OK)
                 {
-                    var bookmark = new BookmarkItem
-                    {
-                        Title = dialog.BookmarkTitle,
-                        Url = dialog.BookmarkUrl
-                    };
-                    bookmarks.Add(bookmark);
+                    bookmarks.Add(new BookmarkItem { Title = dialog.BookmarkTitle, Url = dialog.BookmarkUrl });
                     SaveBookmarks();
                     RefreshBookmarksList();
                 }
@@ -223,9 +225,7 @@ namespace Tlmine
 
         private void RefreshBookmarksList()
         {
-            var controlsToRemove = bookmarksContent.Controls.OfType<Control>()
-                .Where(c => c.Tag?.ToString() == "bookmark").ToList();
-            foreach (var control in controlsToRemove)
+            foreach (var control in bookmarksContent.Controls.OfType<Control>().Where(c => c.Tag?.ToString() == "bookmark").ToList())
             {
                 bookmarksContent.Controls.Remove(control);
                 control.Dispose();
@@ -234,14 +234,7 @@ namespace Tlmine
             int yPos = 35;
             foreach (var bookmark in bookmarks)
             {
-                var panel = new Panel()
-                {
-                    Width = bookmarksContent.Width - 15,
-                    Height = 25,
-                    Top = yPos,
-                    Left = 5,
-                    Tag = "bookmark"
-                };
+                var panel = new Panel() { Width = bookmarksContent.Width - 15, Height = 25, Top = yPos, Left = 5, Tag = "bookmark" };
 
                 var linkLabel = new LinkLabel()
                 {
@@ -249,14 +242,9 @@ namespace Tlmine
                     LinkColor = Color.LightBlue,
                     Width = panel.Width - 25,
                     Height = 25,
-                    Left = 0,
-                    Top = 0,
                     Tag = bookmark.Url
                 };
-                linkLabel.LinkClicked += (s, e) =>
-                {
-                    AddNewTab(linkLabel.Tag.ToString());
-                };
+                linkLabel.LinkClicked += (s, e) => AddNewTab(linkLabel.Tag.ToString());
 
                 var deleteBtn = new Button()
                 {
@@ -272,17 +260,11 @@ namespace Tlmine
                     Tag = bookmark
                 };
                 deleteBtn.FlatAppearance.BorderSize = 0;
-                deleteBtn.Click += (s, e) =>
-                {
-                    bookmarks.Remove((BookmarkItem)deleteBtn.Tag);
-                    SaveBookmarks();
-                    RefreshBookmarksList();
-                };
+                deleteBtn.Click += (s, e) => { bookmarks.Remove((BookmarkItem)deleteBtn.Tag); SaveBookmarks(); RefreshBookmarksList(); };
 
                 panel.Controls.Add(linkLabel);
                 panel.Controls.Add(deleteBtn);
                 bookmarksContent.Controls.Add(panel);
-
                 yPos += 30;
             }
         }
@@ -329,9 +311,9 @@ namespace Tlmine
                 extHeader.Text = extensionsContent.Visible ? "Extensions ▼" : "Extensions ▶";
             };
 
-            var webStoreBtn = new Button()
+            var addExtensionBtn = new Button()
             {
-                Text = "Chrome Web Store",
+                Text = "+ 拡張機能追加",
                 Height = 25,
                 Width = extensionsContent.Width - 10,
                 BackColor = Color.FromArgb(90, 90, 90),
@@ -341,64 +323,79 @@ namespace Tlmine
                 Top = 5,
                 Left = 5
             };
-            webStoreBtn.FlatAppearance.BorderSize = 0;
-            webStoreBtn.Click += (s, e) => AddNewTab("https://chromewebstore.google.com/");
-            extensionsContent.Controls.Add(webStoreBtn);
+            addExtensionBtn.FlatAppearance.BorderSize = 0;
+            addExtensionBtn.Click += (s, e) =>
+            {
+                using (var dialog = new OpenFileDialog { Filter = "JavaScript Files (*.js)|*.js", Title = "拡張機能スクリプトを選択" })
+                {
+                    if (dialog.ShowDialog() == DialogResult.OK)
+                    {
+                        try
+                        {
+                            var newExt = new ExtensionItem
+                            {
+                                Name = Path.GetFileNameWithoutExtension(dialog.FileName),
+                                Enabled = true,
+                                ScriptPath = dialog.FileName,
+                                ScriptContent = File.ReadAllText(dialog.FileName)
+                            };
+                            extensions.Add(newExt);
+                            SaveExtensions();
+                            RefreshExtensionsList();
+                            MessageBox.Show($"拡張機能 '{newExt.Name}' を追加しました。", "成功");
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"読み込み失敗: {ex.Message}", "エラー");
+                        }
+                    }
+                }
+            };
+            extensionsContent.Controls.Add(addExtensionBtn);
 
             RefreshExtensionsList();
         }
 
         private void RefreshExtensionsList()
         {
-            var controlsToRemove = extensionsContent.Controls.OfType<Control>()
-                .Where(c => c.Tag?.ToString() == "extension").ToList();
-            foreach (var control in controlsToRemove)
+            foreach (var control in extensionsContent.Controls.OfType<Control>().Where(c => c.Tag?.ToString() == "extension").ToList())
             {
                 extensionsContent.Controls.Remove(control);
                 control.Dispose();
             }
 
             int yPos = 35;
-            foreach (var extension in extensions)
+            foreach (var ext in extensions)
             {
-                var panel = new Panel()
-                {
-                    Width = extensionsContent.Width - 15,
-                    Height = 25,
-                    Top = yPos,
-                    Left = 5,
-                    Tag = "extension"
-                };
+                var panel = new Panel() { Width = extensionsContent.Width - 15, Height = 25, Top = yPos, Left = 5, Tag = "extension" };
 
-                var label = new Label()
+                panel.Controls.Add(new Label()
                 {
-                    Text = extension.Name.Length > 18 ? extension.Name.Substring(0, 15) + "..." : extension.Name,
+                    Text = ext.Name.Length > 18 ? ext.Name.Substring(0, 15) + "..." : ext.Name,
                     ForeColor = Color.LightGray,
                     Width = panel.Width - 45,
-                    Height = 25,
-                    Left = 0,
-                    Top = 0
-                };
+                    Height = 25
+                });
 
                 var toggleBtn = new Button()
                 {
-                    Text = extension.Enabled ? "ON" : "OFF",
+                    Text = ext.Enabled ? "ON" : "OFF",
                     Width = 30,
                     Height = 20,
                     Left = panel.Width - 50,
                     Top = 2,
-                    BackColor = extension.Enabled ? Color.Green : Color.Gray,
+                    BackColor = ext.Enabled ? Color.Green : Color.Gray,
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                     Font = new Font("Segoe UI", 7),
-                    Tag = extension
+                    Tag = ext
                 };
                 toggleBtn.FlatAppearance.BorderSize = 0;
                 toggleBtn.Click += (s, e) =>
                 {
-                    extension.Enabled = !extension.Enabled;
-                    toggleBtn.Text = extension.Enabled ? "ON" : "OFF";
-                    toggleBtn.BackColor = extension.Enabled ? Color.Green : Color.Gray;
+                    ext.Enabled = !ext.Enabled;
+                    toggleBtn.Text = ext.Enabled ? "ON" : "OFF";
+                    toggleBtn.BackColor = ext.Enabled ? Color.Green : Color.Gray;
                     SaveExtensions();
                 };
 
@@ -413,22 +410,177 @@ namespace Tlmine
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                     Font = new Font("Segoe UI", 7),
-                    Tag = extension
+                    Tag = ext
                 };
                 deleteBtn.FlatAppearance.BorderSize = 0;
-                deleteBtn.Click += (s, e) =>
-                {
-                    extensions.Remove((ExtensionItem)deleteBtn.Tag);
-                    SaveExtensions();
-                    RefreshExtensionsList();
-                };
+                deleteBtn.Click += (s, e) => { extensions.Remove((ExtensionItem)deleteBtn.Tag); SaveExtensions(); RefreshExtensionsList(); };
 
-                panel.Controls.Add(label);
                 panel.Controls.Add(toggleBtn);
                 panel.Controls.Add(deleteBtn);
                 extensionsContent.Controls.Add(panel);
-
                 yPos += 30;
+            }
+        }
+
+        private void InjectExtensions(ChromiumWebBrowser browser)
+        {
+            if (browser == null) return;
+            foreach (var ext in extensions.Where(e => e.Enabled && !string.IsNullOrEmpty(e.ScriptContent)))
+            {
+                try { browser.GetMainFrame()?.EvaluateScriptAsync(ext.ScriptContent); }
+                catch (Exception ex) { Debug.WriteLine($"拡張機能エラー ({ext.Name}): {ex.Message}"); }
+            }
+        }
+
+        private void InitializeDownloadHistoryPanel()
+        {
+            downloadHistoryPanel = new Panel()
+            {
+                Height = 32,
+                Width = sidePanel.Width - 20,
+                BackColor = Color.FromArgb(50, 50, 54),
+                Margin = new Padding(3),
+            };
+            sidePanel.Controls.Add(downloadHistoryPanel);
+
+            var dlHeader = new Label()
+            {
+                Text = "Downloads ▼",
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Dock = DockStyle.Top,
+                Height = 32,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Cursor = Cursors.Hand,
+            };
+            downloadHistoryPanel.Controls.Add(dlHeader);
+
+            downloadHistoryContent = new Panel()
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(70, 70, 74),
+                Visible = true,
+                AutoScroll = true
+            };
+            downloadHistoryPanel.Controls.Add(downloadHistoryContent);
+
+            downloadHistoryContent.SendToBack();
+            dlHeader.BringToFront();
+
+            dlHeader.Click += (s, e) =>
+            {
+                downloadHistoryContent.Visible = !downloadHistoryContent.Visible;
+                downloadHistoryPanel.Height = downloadHistoryContent.Visible ? 200 : 32;
+                dlHeader.Text = downloadHistoryContent.Visible ? "Downloads ▼" : "Downloads ▶";
+            };
+
+            var clearBtn = new Button()
+            {
+                Text = "履歴をクリア",
+                Height = 25,
+                Width = downloadHistoryContent.Width - 10,
+                BackColor = Color.FromArgb(90, 90, 90),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8),
+                Top = 5,
+                Left = 5
+            };
+            clearBtn.FlatAppearance.BorderSize = 0;
+            clearBtn.Click += (s, e) =>
+            {
+                if (MessageBox.Show("ダウンロード履歴をすべて削除しますか？", "確認", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                {
+                    downloadHistory.Clear();
+                    SaveDownloadHistory();
+                    RefreshDownloadHistoryList();
+                }
+            };
+            downloadHistoryContent.Controls.Add(clearBtn);
+
+            RefreshDownloadHistoryList();
+        }
+
+        private void RefreshDownloadHistoryList()
+        {
+            foreach (var control in downloadHistoryContent.Controls.OfType<Control>().Where(c => c.Tag?.ToString() == "download").ToList())
+            {
+                downloadHistoryContent.Controls.Remove(control);
+                control.Dispose();
+            }
+
+            int yPos = 35;
+            foreach (var dl in downloadHistory.OrderByDescending(d => d.DownloadDate).Take(20))
+            {
+                var panel = new Panel() { Width = downloadHistoryContent.Width - 15, Height = 40, Top = yPos, Left = 5, Tag = "download", BackColor = Color.FromArgb(60, 60, 64) };
+
+                panel.Controls.Add(new Label()
+                {
+                    Text = dl.FileName.Length > 25 ? dl.FileName.Substring(0, 22) + "..." : dl.FileName,
+                    ForeColor = Color.LightGray,
+                    Width = panel.Width - 60,
+                    Height = 20,
+                    Left = 5,
+                    Top = 2,
+                    Font = new Font("Segoe UI", 8, FontStyle.Bold)
+                });
+
+                panel.Controls.Add(new Label()
+                {
+                    Text = dl.DownloadDate.ToString("yyyy/MM/dd HH:mm"),
+                    ForeColor = Color.Gray,
+                    Width = panel.Width - 60,
+                    Height = 15,
+                    Left = 5,
+                    Top = 22,
+                    Font = new Font("Segoe UI", 7)
+                });
+
+                var openBtn = new Button()
+                {
+                    Text = "開く",
+                    Width = 45,
+                    Height = 18,
+                    Left = panel.Width - 50,
+                    Top = 2,
+                    BackColor = Color.FromArgb(70, 130, 180),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 7),
+                    Tag = dl
+                };
+                openBtn.FlatAppearance.BorderSize = 0;
+                openBtn.Click += (s, e) =>
+                {
+                    var item = (DownloadHistoryItem)openBtn.Tag;
+                    if (File.Exists(item.FilePath))
+                    {
+                        try { Process.Start(new ProcessStartInfo { FileName = item.FilePath, UseShellExecute = true }); }
+                        catch (Exception ex) { MessageBox.Show($"ファイルを開けませんでした: {ex.Message}", "エラー"); }
+                    }
+                    else MessageBox.Show("ファイルが見つかりません。", "エラー");
+                };
+
+                var deleteBtn = new Button()
+                {
+                    Text = "×",
+                    Width = 45,
+                    Height = 18,
+                    Left = panel.Width - 50,
+                    Top = 20,
+                    BackColor = Color.FromArgb(200, 70, 70),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 7),
+                    Tag = dl
+                };
+                deleteBtn.FlatAppearance.BorderSize = 0;
+                deleteBtn.Click += (s, e) => { downloadHistory.Remove((DownloadHistoryItem)deleteBtn.Tag); SaveDownloadHistory(); RefreshDownloadHistoryList(); };
+
+                panel.Controls.Add(openBtn);
+                panel.Controls.Add(deleteBtn);
+                downloadHistoryContent.Controls.Add(panel);
+                yPos += 45;
             }
         }
 
@@ -439,103 +591,48 @@ namespace Tlmine
                 Dock = DockStyle.Bottom,
                 Height = 36,
                 Padding = new Padding(10, 4, 10, 4),
-                BackColor = Color.FromArgb(240, 240, 240),
+                BackColor = Color.FromArgb(45, 45, 48),
             };
             this.Controls.Add(searchBarPanel);
 
-            downloadPanel = new Panel()
-            {
-                Width = 200,
-                Height = 28,
-                BackColor = Color.FromArgb(240, 240, 240),
-                Visible = false
-            };
-
-            downloadProgressBar = new ProgressBar()
-            {
-                Width = 150,
-                Height = 20,
-                Left = 5,
-                Top = 4,
-                Style = ProgressBarStyle.Continuous
-            };
-
-            downloadLabel = new Label()
-            {
-                Width = 40,
-                Height = 20,
-                Left = 160,
-                Top = 6,
-                Font = new Font("Segoe UI", 8),
-                Text = "0%"
-            };
-
+            downloadPanel = new Panel() { Width = 200, Height = 28, BackColor = Color.FromArgb(45, 45, 48), Visible = false };
+            downloadProgressBar = new ProgressBar() { Width = 150, Height = 20, Left = 5, Top = 4 };
+            downloadLabel = new Label() { Width = 40, Height = 20, Left = 160, Top = 6, Font = new Font("Segoe UI", 8), ForeColor = Color.White, Text = "0%" };
             downloadPanel.Controls.Add(downloadProgressBar);
             downloadPanel.Controls.Add(downloadLabel);
 
-            var navigationPanel = new Panel()
-            {
-                Dock = DockStyle.Right,
-                Width = 120,
-                BackColor = Color.FromArgb(240, 240, 240),
-            };
-            searchBarPanel.Controls.Add(navigationPanel);
+            var navPanel = new Panel() { Dock = DockStyle.Right, Width = 160, BackColor = Color.FromArgb(45, 45, 48) };
+            searchBarPanel.Controls.Add(navPanel);
             searchBarPanel.Controls.Add(downloadPanel);
 
-            backButton = new Button()
+            backButton = CreateNavButton("◀", 5, false);
+            forwardButton = CreateNavButton("▶", 42, false);
+            reloadButton = CreateNavButton("⟳", 79, true);
+            addBookmarkButton = new Button()
             {
-                Text = "◀",
+                Text = "★",
                 Width = 35,
                 Height = 28,
-                Left = 5,
+                Left = 116,
                 Top = 2,
-                BackColor = Color.FromArgb(220, 220, 220),
-                ForeColor = Color.Black,
+                BackColor = Color.FromArgb(60, 60, 64),
+                ForeColor = Color.Gold,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Enabled = false
+                Font = new Font("Segoe UI", 14, FontStyle.Bold)
             };
-            backButton.FlatAppearance.BorderSize = 1;
-            backButton.FlatAppearance.BorderColor = Color.Gray;
-            backButton.Click += BackButton_Click;
-            navigationPanel.Controls.Add(backButton);
+            addBookmarkButton.FlatAppearance.BorderSize = 0;
+            addBookmarkButton.Click += AddBookmarkBtn_Click;
 
-            forwardButton = new Button()
-            {
-                Text = "▶",
-                Width = 35,
-                Height = 28,
-                Left = 42,
-                Top = 2,
-                BackColor = Color.FromArgb(220, 220, 220),
-                ForeColor = Color.Black,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Enabled = false
-            };
-            forwardButton.FlatAppearance.BorderSize = 1;
-            forwardButton.FlatAppearance.BorderColor = Color.Gray;
-            forwardButton.Click += ForwardButton_Click;
-            navigationPanel.Controls.Add(forwardButton);
+            backButton.Click += (s, e) => browsers.FirstOrDefault(b => b.Visible)?.Back();
+            forwardButton.Click += (s, e) => browsers.FirstOrDefault(b => b.Visible)?.Forward();
+            reloadButton.Click += (s, e) => browsers.FirstOrDefault(b => b.Visible)?.Reload();
 
-            reloadButton = new Button()
-            {
-                Text = "⟳",
-                Width = 35,
-                Height = 28,
-                Left = 79,
-                Top = 2,
-                BackColor = Color.FromArgb(220, 220, 220),
-                ForeColor = Color.Black,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold)
-            };
-            reloadButton.FlatAppearance.BorderSize = 1;
-            reloadButton.FlatAppearance.BorderColor = Color.Gray;
-            reloadButton.Click += ReloadButton_Click;
-            navigationPanel.Controls.Add(reloadButton);
+            navPanel.Controls.Add(backButton);
+            navPanel.Controls.Add(forwardButton);
+            navPanel.Controls.Add(reloadButton);
+            navPanel.Controls.Add(addBookmarkButton);
 
-            downloadPanel.Left = navigationPanel.Left - downloadPanel.Width - 10;
+            downloadPanel.Left = navPanel.Left - downloadPanel.Width - 10;
             downloadPanel.Top = 4;
 
             searchBar = new TextBox()
@@ -544,54 +641,60 @@ namespace Tlmine
                 Font = new Font("Segoe UI", 11),
                 BorderStyle = BorderStyle.None,
                 ForeColor = Color.Gray,
-                BackColor = Color.White,
-                Margin = new Padding(0),
+                BackColor = Color.FromArgb(60, 60, 64),
                 Text = searchBarPlaceholder,
             };
 
-            searchBar.GotFocus += SearchBar_GotFocus;
-            searchBar.LostFocus += SearchBar_LostFocus;
+            searchBar.GotFocus += (s, e) =>
+            {
+                if (searchBar.Text == searchBarPlaceholder)
+                {
+                    var cur = browsers.FirstOrDefault(b => b.Visible);
+                    searchBar.Text = cur != null && !string.IsNullOrEmpty(cur.Address) ? cur.Address : "";
+                    searchBar.ForeColor = Color.White;
+                    searchBar.SelectAll();
+                }
+            };
+
+            searchBar.LostFocus += (s, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(searchBar.Text))
+                {
+                    searchBar.Text = searchBarPlaceholder;
+                    searchBar.ForeColor = Color.Gray;
+                }
+            };
+
             searchBar.KeyDown += SearchBar_KeyDown;
-
             searchBarPanel.Controls.Add(searchBar);
-            searchBarPanel.Paint += SearchBarPanel_Paint;
-        }
-
-        private void SearchBar_GotFocus(object sender, EventArgs e)
-        {
-            if (searchBar.Text == searchBarPlaceholder)
+            searchBarPanel.Paint += (s, e) =>
             {
-                var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-                if (currentBrowser != null && !string.IsNullOrEmpty(currentBrowser.Address))
-                {
-                    searchBar.Text = currentBrowser.Address;
-                }
-                else
-                {
-                    searchBar.Text = "";
-                }
-                searchBar.ForeColor = Color.Black;
-                searchBar.SelectAll();
-            }
+                var g = e.Graphics;
+                var rect = new Rectangle(0, 0, searchBarPanel.Width - 1, searchBarPanel.Height - 1);
+                using (var brush = new SolidBrush(Color.FromArgb(60, 60, 64)))
+                    g.FillRectangle(brush, rect);
+                using (var pen = new Pen(Color.FromArgb(80, 80, 84)))
+                    g.DrawRectangle(pen, rect);
+            };
         }
 
-        private void SearchBar_LostFocus(object sender, EventArgs e)
+        private Button CreateNavButton(string text, int left, bool enabled)
         {
-            if (string.IsNullOrWhiteSpace(searchBar.Text))
+            var btn = new Button()
             {
-                searchBar.Text = searchBarPlaceholder;
-                searchBar.ForeColor = Color.Gray;
-            }
-        }
-
-        private void SearchBarPanel_Paint(object sender, PaintEventArgs e)
-        {
-            var g = e.Graphics;
-            var rect = new Rectangle(0, 0, searchBarPanel.Width - 1, searchBarPanel.Height - 1);
-            using (var brush = new SolidBrush(Color.White))
-                g.FillRectangle(brush, rect);
-            using (var pen = new Pen(Color.LightGray))
-                g.DrawRectangle(pen, rect);
+                Text = text,
+                Width = 35,
+                Height = 28,
+                Left = left,
+                Top = 2,
+                BackColor = Color.FromArgb(60, 60, 64),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", text == "⟳" ? 12 : 10, FontStyle.Bold),
+                Enabled = enabled
+            };
+            btn.FlatAppearance.BorderSize = 0;
+            return btn;
         }
 
         private async void SearchBar_KeyDown(object sender, KeyEventArgs e)
@@ -601,289 +704,110 @@ namespace Tlmine
                 string text = searchBar.Text.Trim();
                 if (string.IsNullOrEmpty(text) || text == searchBarPlaceholder) return;
 
-                string url = "";
-                string suggestedUrl = "";
+                string url = text.StartsWith("http://") || text.StartsWith("https://") ? text
+                    : IsValidDomain(text) ? "https://" + text
+                    : $"https://www.google.com/search?q={Uri.EscapeDataString(text)}";
 
-                if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                    text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                {
-                    url = text;
-                }
-                else if (IsValidDomain(text))
-                {
-                    url = "https://" + text;
-                }
-                else
-                {
-                    url = $"https://www.google.com/search?q={Uri.EscapeDataString(text)}";
-                    suggestedUrl = GetUrlSuggestion(text);
-                }
+                string suggestion = IsValidDomain(text) || text.StartsWith("http") ? "" : GetUrlSuggestion(text);
 
-                var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-                if (currentBrowser != null)
+                var browser = browsers.FirstOrDefault(b => b.Visible);
+                if (browser != null)
                 {
-                    currentBrowser.Load(url);
-
-                    if (!string.IsNullOrEmpty(suggestedUrl))
+                    browser.Load(url);
+                    if (!string.IsNullOrEmpty(suggestion))
                     {
                         await Task.Delay(1500);
-                        await ShowUrlSuggestion(suggestedUrl);
-                    }
-                    else
-                    {
-                        await ClearUrlSuggestion();
+                        await ShowUrlSuggestion(suggestion);
                     }
                 }
-
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
         }
 
-        private string GetUrlSuggestion(string searchQuery)
+        private string GetUrlSuggestion(string query)
         {
-            var query = searchQuery.ToLower();
-
+            var q = query.ToLower();
             var suggestions = new Dictionary<string, string>
             {
-                {"youtube", "https://www.youtube.com"},
-                {"twitter", "https://twitter.com"},
-                {"facebook", "https://www.facebook.com"},
-                {"instagram", "https://www.instagram.com"},
-                {"github", "https://github.com"},
-                {"stackoverflow", "https://stackoverflow.com"},
-                {"amazon", "https://www.amazon.co.jp"},
-                {"楽天", "https://www.rakuten.co.jp"},
-                {"yahoo", "https://www.yahoo.co.jp"},
-                {"ニコニコ", "https://www.nicovideo.jp"},
-                {"ニコニコ動画", "https://www.nicovideo.jp"},
-                {"wikipedia", "https://ja.wikipedia.org"},
-                {"ウィキペディア", "https://ja.wikipedia.org"},
-                {"gmail", "https://mail.google.com"},
-                {"outlook", "https://outlook.com"}
+                {"youtube", "https://www.youtube.com"}, {"twitter", "https://twitter.com"},
+                {"facebook", "https://www.facebook.com"}, {"instagram", "https://www.instagram.com"},
+                {"github", "https://github.com"}, {"amazon", "https://www.amazon.co.jp"},
+                {"楽天", "https://www.rakuten.co.jp"}, {"yahoo", "https://www.yahoo.co.jp"},
+                {"ニコニコ", "https://www.nicovideo.jp"}, {"wikipedia", "https://ja.wikipedia.org"},
+                {"gmail", "https://mail.google.com"}
             };
-
-            foreach (var suggestion in suggestions)
-            {
-                if (query.Contains(suggestion.Key))
-                {
-                    return suggestion.Value;
-                }
-            }
-
-            return "";
-        }
-
-        private void BackButton_Click(object sender, EventArgs e)
-        {
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null && currentBrowser.CanGoBack)
-            {
-                currentBrowser.Back();
-            }
-        }
-
-        private void ForwardButton_Click(object sender, EventArgs e)
-        {
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null && currentBrowser.CanGoForward)
-            {
-                currentBrowser.Forward();
-            }
-        }
-
-        private void ReloadButton_Click(object sender, EventArgs e)
-        {
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null)
-            {
-                currentBrowser.Reload();
-            }
-        }
-
-        private void UpdateNavigationButtons()
-        {
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null)
-            {
-                if (this.InvokeRequired)
-                {
-                    this.Invoke(new Action(() =>
-                    {
-                        backButton.Enabled = currentBrowser.CanGoBack;
-                        forwardButton.Enabled = currentBrowser.CanGoForward;
-                    }));
-                }
-                else
-                {
-                    backButton.Enabled = currentBrowser.CanGoBack;
-                    forwardButton.Enabled = currentBrowser.CanGoForward;
-                }
-            }
+            return suggestions.FirstOrDefault(s => q.Contains(s.Key)).Value ?? "";
         }
 
         private bool IsValidDomain(string text)
         {
             if (text.Contains(" ")) return false;
-
             if (text.Contains("."))
             {
                 var parts = text.Split('.');
                 if (parts.Length >= 2)
                 {
                     var tld = parts[parts.Length - 1];
-                    if (tld.Length >= 2 && tld.All(c => char.IsLetter(c)))
-                    {
-                        return true;
-                    }
+                    return tld.Length >= 2 && tld.All(char.IsLetter);
                 }
             }
-
             return false;
-        }
-
-        private void UpdateSearchBarUrl()
-        {
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null && !searchBar.Focused)
-            {
-                if (string.IsNullOrEmpty(currentBrowser.Address) || currentBrowser.Address == "about:blank")
-                {
-                    searchBar.Text = searchBarPlaceholder;
-                    searchBar.ForeColor = Color.Gray;
-                }
-                else
-                {
-                    searchBar.Text = currentBrowser.Address;
-                    searchBar.ForeColor = Color.Black;
-                }
-            }
         }
 
         private async Task ShowUrlSuggestion(string targetUrl)
         {
-            string script = $@"
-                (function() {{
-                    var existing = document.getElementById('tlmine-url-suggestion');
-                    if (existing) existing.remove();
-                    
-                    var div = document.createElement('div');
-                    div.id = 'tlmine-url-suggestion';
-                    div.style.cssText = `
-                        padding: 12px 20px;
-                        background: linear-gradient(135deg, #4CAF50, #45a049);
-                        border: none;
-                        font-family: 'Segoe UI', Arial, sans-serif;
-                        font-size: 14px;
-                        position: fixed;
-                        top: 0;
-                        left: 0;
-                        width: 100%;
-                        z-index: 99999;
-                        text-align: center;
-                        color: white;
-                        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-                        animation: slideDown 0.3s ease-out;
-                    `;
-                    
-                    var style = document.createElement('style');
-                    if (!document.getElementById('tlmine-suggestion-styles')) {{
-                        style.id = 'tlmine-suggestion-styles';
-                        style.textContent = `
-                            @keyframes slideDown {{
-                                from {{ transform: translateY(-100%); opacity: 0; }}
-                                to {{ transform: translateY(0); opacity: 1; }}
-                            }}
-                            #tlmine-url-suggestion a {{
-                                color: #fff !important;
-                                text-decoration: underline !important;
-                                font-weight: bold !important;
-                                margin-left: 10px !important;
-                                cursor: pointer !important;
-                            }}
-                            #tlmine-url-suggestion a:hover {{
-                                color: #e8f5e8 !important;
-                                background-color: rgba(255,255,255,0.1) !important;
-                                padding: 2px 4px !important;
-                                border-radius: 3px !important;
-                            }}
-                            #tlmine-close-suggestion {{
-                                background: rgba(255,255,255,0.2) !important;
-                                border: none !important;
-                                color: white !important;
-                                padding: 4px 8px !important;
-                                margin-left: 15px !important;
-                                border-radius: 3px !important;
-                                cursor: pointer !important;
-                                font-size: 12px !important;
-                            }}
-                            #tlmine-close-suggestion:hover {{
-                                background: rgba(255,255,255,0.3) !important;
-                            }}
-                        `;
-                        document.head.appendChild(style);
-                    }}
-                    
-                    div.innerHTML = `
-                        🌐 このURLをお探しですか？ 
-                        <a href=""#"" id=""tlmine-direct-link"">{targetUrl.Replace("\"", "\\\"")}</a>
-                        <button id=""tlmine-close-suggestion"">×</button>
-                    `;
-                    
-                    document.body.prepend(div);
-                    
-                    document.getElementById('tlmine-direct-link').addEventListener('click', function(e) {{
-                        e.preventDefault();
-                        window.location.href = '{targetUrl.Replace("'", "\\'")}';
-                    }});
-                    
-                    document.getElementById('tlmine-close-suggestion').addEventListener('click', function() {{
-                        document.getElementById('tlmine-url-suggestion').remove();
-                    }});
-                    
-                    setTimeout(function() {{
-                        var suggestion = document.getElementById('tlmine-url-suggestion');
-                        if (suggestion) {{
-                            suggestion.style.animation = 'slideDown 0.3s ease-out reverse';
-                            setTimeout(() => suggestion.remove(), 300);
-                        }}
-                    }}, 10000);
-                }})();
-            ";
+            var browser = browsers.FirstOrDefault(b => b.Visible);
+            if (browser == null) return;
 
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null)
+            string script = $@"
+(function(){{
+    var e=document.getElementById('tlmine-url-suggestion');
+    if(e)e.remove();
+    var div=document.createElement('div');
+    div.id='tlmine-url-suggestion';
+    div.style.cssText='padding:12px 20px;background:linear-gradient(135deg,#4CAF50,#45a049);font-size:14px;position:fixed;top:0;left:0;width:100%;z-index:99999;text-align:center;color:white;box-shadow:0 2px 10px rgba(0,0,0,0.3)';
+    div.innerHTML='🌐 このURLをお探しですか？ <a href=""#"" id=""tl-link"" style=""color:#fff;text-decoration:underline;margin-left:10px"">{targetUrl.Replace("\"", "\\\"")}</a> <button id=""tl-close"" style=""background:rgba(255,255,255,0.2);border:none;color:white;padding:4px 8px;margin-left:15px;border-radius:3px;cursor:pointer"">×</button>';
+    document.body.prepend(div);
+    document.getElementById('tl-link').onclick=function(e){{e.preventDefault();window.location.href='{targetUrl.Replace("'", "\\'")}'}};
+    document.getElementById('tl-close').onclick=function(){{div.remove()}};
+    setTimeout(function(){{div.remove()}},10000);
+}})();";
+
+            try { await browser.EvaluateScriptAsync(script); }
+            catch (Exception ex) { Debug.WriteLine($"JS実行エラー: {ex.Message}"); }
+        }
+
+        private void UpdateNavigationButtons()
+        {
+            var browser = browsers.FirstOrDefault(b => b.Visible);
+            if (browser != null)
             {
-                try
+                if (InvokeRequired)
+                    Invoke(new Action(() =>
+                    {
+                        backButton.Enabled = browser.CanGoBack;
+                        forwardButton.Enabled = browser.CanGoForward;
+                        backButton.ForeColor = browser.CanGoBack ? Color.White : Color.Gray;
+                        forwardButton.ForeColor = browser.CanGoForward ? Color.White : Color.Gray;
+                    }));
+                else
                 {
-                    await currentBrowser.EvaluateScriptAsync(script);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"JavaScript実行エラー: {ex.Message}");
+                    backButton.Enabled = browser.CanGoBack;
+                    forwardButton.Enabled = browser.CanGoForward;
+                    backButton.ForeColor = browser.CanGoBack ? Color.White : Color.Gray;
+                    forwardButton.ForeColor = browser.CanGoForward ? Color.White : Color.Gray;
                 }
             }
         }
 
-        private async Task ClearUrlSuggestion()
+        private void UpdateSearchBarUrl()
         {
-            var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
-            if (currentBrowser != null)
+            var browser = browsers.FirstOrDefault(b => b.Visible);
+            if (browser != null && !searchBar.Focused)
             {
-                string script = @"
-                    (function() {
-                        var el = document.getElementById('tlmine-url-suggestion');
-                        if(el) el.remove();
-                    })();
-                ";
-                try
-                {
-                    await currentBrowser.EvaluateScriptAsync(script);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"JavaScript実行エラー: {ex.Message}");
-                }
+                searchBar.Text = string.IsNullOrEmpty(browser.Address) || browser.Address == "about:blank" ? searchBarPlaceholder : browser.Address;
+                searchBar.ForeColor = searchBar.Text == searchBarPlaceholder ? Color.Gray : Color.White;
             }
         }
 
@@ -892,28 +816,27 @@ namespace Tlmine
             if (!(Cef.IsInitialized ?? false))
             {
                 var settings = new CefSettings();
+                var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tlmine");
+                Directory.CreateDirectory(appData);
+                settings.RootCachePath = appData;
+                settings.CachePath = Path.Combine(appData, "Cache");
+                settings.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-                // 複数インスタンス起動時の問題を解決: 各プロセスごとに独立したキャッシュディレクトリを使用
-                var processId = Process.GetCurrentProcess().Id;
-                var cachePath = Path.Combine(Path.GetTempPath(), "Tlmine", $"Cache_{processId}");
-                settings.CachePath = cachePath;
-
-                // 動画再生を改善するための設定
+                settings.CefCommandLineArgs.Add("disable-gpu-vsync");
+                settings.CefCommandLineArgs.Add("disable-background-timer-throttling");
+                settings.CefCommandLineArgs.Add("disable-backgrounding-occluded-windows");
+                settings.CefCommandLineArgs.Add("disable-renderer-backgrounding");
+                settings.CefCommandLineArgs.Add("disable-blink-features", "AutomationControlled");
                 settings.CefCommandLineArgs.Add("enable-media-stream");
-                settings.CefCommandLineArgs.Add("enable-usermedia-screen-capturing");
-                settings.CefCommandLineArgs.Add("enable-speech-synthesis");
-                settings.CefCommandLineArgs.Add("enable-web-bluetooth");
                 settings.CefCommandLineArgs.Add("autoplay-policy", "no-user-gesture-required");
-                settings.CefCommandLineArgs.Add("disable-features", "VizDisplayCompositor");
-                settings.CefCommandLineArgs.Add("enable-gpu-rasterization");
-                settings.CefCommandLineArgs.Add("enable-oop-rasterization");
-                settings.CefCommandLineArgs.Add("enable-zero-copy");
-
-                // H.264コーデックサポート
                 settings.CefCommandLineArgs.Add("enable-proprietary-codecs");
+                settings.CefCommandLineArgs.Add("enable-gpu-rasterization");
+                settings.CefCommandLineArgs.Add("enable-zero-copy");
+                settings.CefCommandLineArgs.Add("enable-webgl");
 
-                // 複数プロセス分離
+                settings.PersistSessionCookies = true;
                 settings.MultiThreadedMessageLoop = true;
+                settings.LogSeverity = LogSeverity.Disable;
 
                 Cef.Initialize(settings);
             }
@@ -929,21 +852,23 @@ namespace Tlmine
                 DownloadHandler = new CustomDownloadHandler(this)
             };
 
-            browser.FrameLoadEnd += Browser_FrameLoadEnd;
+            browser.FrameLoadEnd += (s, e) => { if (e.Frame.IsMain) { UpdateNavigationButtons(); InjectExtensions(browser); } };
             browser.TitleChanged += Browser_TitleChanged;
-            browser.AddressChanged += Browser_AddressChanged;
-            browser.LoadingStateChanged += Browser_LoadingStateChanged;
+            browser.AddressChanged += (s, e) =>
+            {
+                if (browser.Visible)
+                {
+                    if (InvokeRequired)
+                        Invoke(new Action(() => { if (!searchBar.Focused) { searchBar.Text = e.Address; searchBar.ForeColor = Color.White; } UpdateNavigationButtons(); }));
+                    else { if (!searchBar.Focused) { searchBar.Text = e.Address; searchBar.ForeColor = Color.White; } UpdateNavigationButtons(); }
+                }
+            };
+            browser.LoadingStateChanged += (s, e) => UpdateNavigationButtons();
 
             browsers.Add(browser);
-            this.Controls.Add(browser);
+            Controls.Add(browser);
 
-            var tabContainer = new Panel()
-            {
-                Width = tabButtonsPanel.Width - 20,
-                Height = 35,
-                BackColor = Color.FromArgb(70, 70, 70),
-                Margin = new Padding(5, 2, 5, 2)
-            };
+            var tabContainer = new Panel() { Width = tabButtonsPanel.Width - 20, Height = 35, BackColor = Color.FromArgb(70, 70, 70), Margin = new Padding(5, 2, 5, 2) };
 
             var closeBtn = new Button()
             {
@@ -953,7 +878,6 @@ namespace Tlmine
                 BackColor = Color.FromArgb(70, 70, 70),
                 ForeColor = Color.LightGray,
                 FlatStyle = FlatStyle.Flat,
-                Margin = new Padding(0),
                 Tag = browser,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -961,7 +885,7 @@ namespace Tlmine
                 Name = "closeButton"
             };
             closeBtn.FlatAppearance.BorderSize = 0;
-            closeBtn.Click += CloseTabButton_Click;
+            closeBtn.Click += (s, e) => CloseTab(browser);
             closeBtn.MouseEnter += (s, e) => closeBtn.BackColor = Color.FromArgb(200, 70, 70);
             closeBtn.MouseLeave += (s, e) => closeBtn.BackColor = Color.FromArgb(70, 70, 70);
 
@@ -973,7 +897,6 @@ namespace Tlmine
                 BackColor = Color.FromArgb(70, 70, 70),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Margin = new Padding(0),
                 Tag = browser,
                 Font = new Font("Segoe UI", 9),
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -984,159 +907,83 @@ namespace Tlmine
                 TextImageRelation = TextImageRelation.ImageBeforeText
             };
             tabBtn.FlatAppearance.BorderSize = 0;
-            tabBtn.Click += TabButton_Click;
+            tabBtn.Click += (s, e) => SelectTab(browser, tabContainer);
 
             tabContainer.Controls.Add(closeBtn);
             tabContainer.Controls.Add(tabBtn);
 
-            var addButtonIndex = tabButtonsPanel.Controls.IndexOf(addTabButton);
             tabButtonsPanel.Controls.Add(tabContainer);
-            tabButtonsPanel.Controls.SetChildIndex(tabContainer, addButtonIndex);
-
+            tabButtonsPanel.Controls.SetChildIndex(tabContainer, tabButtonsPanel.Controls.IndexOf(addTabButton));
             tabButtons.Add(tabBtn);
 
             SelectTab(browser, tabContainer);
-
             CreateDefaultIcon(tabBtn);
-        }
-
-        private void Browser_LoadingStateChanged(object sender, LoadingStateChangedEventArgs e)
-        {
-            // ページの読み込み状態が変わるたびにナビゲーションボタンを更新
-            UpdateNavigationButtons();
-        }
-
-        private void Browser_AddressChanged(object sender, AddressChangedEventArgs e)
-        {
-            var browser = sender as ChromiumWebBrowser;
-            if (browser != null && browser.Visible)
-            {
-                this.Invoke(new Action(() =>
-                {
-                    if (!searchBar.Focused)
-                    {
-                        searchBar.Text = e.Address;
-                        searchBar.ForeColor = Color.Black;
-                    }
-                    UpdateNavigationButtons();
-                }));
-            }
-        }
-
-        private void TabButton_Click(object sender, EventArgs e)
-        {
-            var clickedButton = sender as Button;
-            var associatedBrowser = clickedButton?.Tag as ChromiumWebBrowser;
-
-            if (associatedBrowser != null)
-            {
-                var tabContainer = clickedButton.Parent as Panel;
-                SelectTab(associatedBrowser, tabContainer);
-            }
-        }
-
-        private void CloseTabButton_Click(object sender, EventArgs e)
-        {
-            var closeButton = sender as Button;
-            var associatedBrowser = closeButton?.Tag as ChromiumWebBrowser;
-
-            if (associatedBrowser != null)
-            {
-                CloseTab(associatedBrowser);
-            }
         }
 
         private void CloseTab(ChromiumWebBrowser browserToClose)
         {
-            if (browsers.Count <= 1)
-            {
-                MessageBox.Show("最後のタブは閉じることができません。", "情報", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            if (browsers.Count <= 1) { MessageBox.Show("最後のタブは閉じることができません。", "情報"); return; }
 
             bool wasSelected = browserToClose.Visible;
-
-            Panel tabContainerToRemove = null;
+            Panel tabContainer = null;
             foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
             {
-                var tabButton = container.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browserToClose);
-                if (tabButton != null)
+                if (container.Controls.OfType<Button>().Any(btn => btn.Tag == browserToClose))
                 {
-                    tabContainerToRemove = container;
+                    tabContainer = container;
                     break;
                 }
             }
 
-            if (tabContainerToRemove != null)
-            {
-                tabButtonsPanel.Controls.Remove(tabContainerToRemove);
-                tabContainerToRemove.Dispose();
-            }
+            if (tabContainer != null) { tabButtonsPanel.Controls.Remove(tabContainer); tabContainer.Dispose(); }
 
-            var tabButtonToRemove = tabButtons.FirstOrDefault(btn => btn.Tag == browserToClose && btn.Name == "tabButton");
-            if (tabButtonToRemove != null)
-            {
-                tabButtons.Remove(tabButtonToRemove);
-            }
+            var tabBtn = tabButtons.FirstOrDefault(btn => btn.Tag == browserToClose && btn.Name == "tabButton");
+            if (tabBtn != null) tabButtons.Remove(tabBtn);
 
-            if (browserTitles.ContainsKey(browserToClose))
-            {
-                browserTitles.Remove(browserToClose);
-            }
+            if (browserTitles.ContainsKey(browserToClose)) browserTitles.Remove(browserToClose);
 
             browsers.Remove(browserToClose);
-            this.Controls.Remove(browserToClose);
+            Controls.Remove(browserToClose);
             browserToClose.Dispose();
 
             if (wasSelected && browsers.Count > 0)
             {
                 var nextBrowser = browsers.Last();
-                var nextTabContainer = FindTabContainer(nextBrowser);
-                if (nextTabContainer != null)
+                Panel nextContainer = null;
+                foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
                 {
-                    SelectTab(nextBrowser, nextTabContainer);
+                    if (container.Controls.OfType<Button>().Any(btn => btn.Tag == nextBrowser && btn.Name == "tabButton"))
+                    {
+                        nextContainer = container;
+                        break;
+                    }
                 }
+                if (nextContainer != null) SelectTab(nextBrowser, nextContainer);
             }
-        }
-
-        private Panel FindTabContainer(ChromiumWebBrowser browser)
-        {
-            foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
-            {
-                var tabButton = container.Controls.OfType<Button>().FirstOrDefault(btn => btn.Tag == browser && btn.Name == "tabButton");
-                if (tabButton != null)
-                {
-                    return container;
-                }
-            }
-            return null;
         }
 
         private void Browser_TitleChanged(object sender, TitleChangedEventArgs e)
         {
             var browser = sender as ChromiumWebBrowser;
-            var tabContainer = FindTabContainer(browser);
-            var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Name == "tabButton");
+            Panel tabContainer = null;
+            foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
+            {
+                if (container.Controls.OfType<Button>().Any(btn => btn.Tag == browser && btn.Name == "tabButton"))
+                {
+                    tabContainer = container;
+                    break;
+                }
+            }
 
+            var tabButton = tabContainer?.Controls.OfType<Button>().FirstOrDefault(btn => btn.Name == "tabButton");
             if (tabButton != null && !string.IsNullOrEmpty(e.Title))
             {
                 browserTitles[browser] = e.Title;
-
                 string title = e.Title.Length > 22 ? e.Title.Substring(0, 19) + "..." : e.Title;
 
                 if (tabButton.InvokeRequired)
-                {
-                    tabButton.Invoke(new Action(() =>
-                    {
-                        tabButton.Text = title;
-                        LoadFavicon(browser, tabButton);
-                    }));
-                }
-                else
-                {
-                    tabButton.Text = title;
-                    LoadFavicon(browser, tabButton);
-                }
+                    tabButton.Invoke(new Action(() => { tabButton.Text = title; LoadFavicon(browser, tabButton); }));
+                else { tabButton.Text = title; LoadFavicon(browser, tabButton); }
             }
         }
 
@@ -1147,8 +994,6 @@ namespace Tlmine
                 if (!string.IsNullOrEmpty(browser.Address))
                 {
                     var uri = new Uri(browser.Address);
-                    string faviconUrl = $"{uri.Scheme}://{uri.Host}/favicon.ico";
-
                     var webClient = new System.Net.WebClient();
                     webClient.DownloadDataCompleted += (s, e) =>
                     {
@@ -1156,94 +1001,52 @@ namespace Tlmine
                         {
                             if (e.Error == null && e.Result != null && e.Result.Length > 0)
                             {
-                                using (var ms = new System.IO.MemoryStream(e.Result))
+                                using (var ms = new MemoryStream(e.Result))
                                 {
-                                    var favicon = Image.FromStream(ms);
-                                    var resizedFavicon = new Bitmap(favicon, new Size(16, 16));
-
+                                    var favicon = new Bitmap(Image.FromStream(ms), new Size(16, 16));
                                     if (tabButton.InvokeRequired)
-                                    {
-                                        tabButton.Invoke(new Action(() =>
-                                        {
-                                            tabButton.Image = resizedFavicon;
-                                        }));
-                                    }
-                                    else
-                                    {
-                                        tabButton.Image = resizedFavicon;
-                                    }
+                                        tabButton.Invoke(new Action(() => tabButton.Image = favicon));
+                                    else tabButton.Image = favicon;
                                 }
                             }
-                            else
-                            {
-                                SetDefaultIcon(tabButton);
-                            }
+                            else CreateDefaultIcon(tabButton);
                         }
-                        catch
-                        {
-                            SetDefaultIcon(tabButton);
-                        }
+                        catch { CreateDefaultIcon(tabButton); }
                     };
-
-                    webClient.DownloadDataAsync(new Uri(faviconUrl));
+                    webClient.DownloadDataAsync(new Uri($"{uri.Scheme}://{uri.Host}/favicon.ico"));
                 }
-                else
-                {
-                    SetDefaultIcon(tabButton);
-                }
+                else CreateDefaultIcon(tabButton);
             }
-            catch
-            {
-                SetDefaultIcon(tabButton);
-            }
-        }
-
-        private void SetDefaultIcon(Button tabButton)
-        {
-            if (tabButton.InvokeRequired)
-            {
-                tabButton.Invoke(new Action(() => CreateDefaultIcon(tabButton)));
-            }
-            else
-            {
-                CreateDefaultIcon(tabButton);
-            }
+            catch { CreateDefaultIcon(tabButton); }
         }
 
         private void CreateDefaultIcon(Button tabButton)
         {
-            var bitmap = new Bitmap(16, 16);
-            using (var g = Graphics.FromImage(bitmap))
+            var action = new Action(() =>
             {
-                g.FillEllipse(Brushes.LightBlue, 1, 1, 14, 14);
-                g.DrawEllipse(Pens.DarkBlue, 1, 1, 14, 14);
-                g.DrawEllipse(Pens.Green, 3, 4, 10, 8);
-                g.DrawEllipse(Pens.Green, 5, 2, 6, 4);
-            }
-            tabButton.Image = bitmap;
+                var bitmap = new Bitmap(16, 16);
+                using (var g = Graphics.FromImage(bitmap))
+                {
+                    g.FillEllipse(Brushes.LightBlue, 1, 1, 14, 14);
+                    g.DrawEllipse(Pens.DarkBlue, 1, 1, 14, 14);
+                    g.DrawEllipse(Pens.Green, 3, 4, 10, 8);
+                    g.DrawEllipse(Pens.Green, 5, 2, 6, 4);
+                }
+                tabButton.Image = bitmap;
+            });
+
+            if (tabButton.InvokeRequired) tabButton.Invoke(action);
+            else action();
         }
 
         private void SelectTab(ChromiumWebBrowser browser, Panel tabContainer)
         {
-            foreach (var b in browsers)
-            {
-                b.Visible = false;
-            }
-
+            foreach (var b in browsers) b.Visible = false;
             foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
             {
                 container.BackColor = Color.FromArgb(70, 70, 70);
                 foreach (Button btn in container.Controls.OfType<Button>())
-                {
-                    if (btn.Name == "tabButton")
-                    {
-                        btn.BackColor = Color.FromArgb(70, 70, 70);
-                    }
-                    else if (btn.Name == "closeButton")
-                    {
-                        btn.BackColor = Color.FromArgb(70, 70, 70);
-                    }
-                }
+                    btn.BackColor = Color.FromArgb(70, 70, 70);
             }
 
             browser.Visible = true;
@@ -1251,79 +1054,40 @@ namespace Tlmine
 
             tabContainer.BackColor = Color.FromArgb(100, 100, 100);
             foreach (Button btn in tabContainer.Controls.OfType<Button>())
-            {
-                if (btn.Name == "tabButton")
-                {
-                    btn.BackColor = Color.FromArgb(100, 100, 100);
-                }
-                else if (btn.Name == "closeButton")
-                {
-                    btn.BackColor = Color.FromArgb(100, 100, 100);
-                }
-            }
+                btn.BackColor = Color.FromArgb(100, 100, 100);
 
             UpdateSearchBarUrl();
             UpdateNavigationButtons();
+            InjectExtensions(browser);
         }
 
-        private void Browser_FrameLoadEnd(object sender, FrameLoadEndEventArgs e)
-        {
-            if (e.Frame.IsMain)
-            {
-                UpdateNavigationButtons();
-            }
-        }
-
-        public void AddNewTabFromUrl(string url)
-        {
-            AddNewTab(url);
-        }
+        public void AddNewTabFromUrl(string url) => AddNewTab(url);
 
         public void UpdateDownloadProgress(int percentage, string fileName)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(() =>
-                {
-                    downloadPanel.Visible = true;
-                    downloadProgressBar.Value = Math.Min(100, Math.Max(0, percentage));
-                    downloadLabel.Text = $"{percentage}%";
-                }));
-            }
-            else
-            {
-                downloadPanel.Visible = true;
-                downloadProgressBar.Value = Math.Min(100, Math.Max(0, percentage));
-                downloadLabel.Text = $"{percentage}%";
-            }
+            if (InvokeRequired)
+                Invoke(new Action(() => { downloadPanel.Visible = true; downloadProgressBar.Value = Math.Min(100, Math.Max(0, percentage)); downloadLabel.Text = $"{percentage}%"; }));
+            else { downloadPanel.Visible = true; downloadProgressBar.Value = Math.Min(100, Math.Max(0, percentage)); downloadLabel.Text = $"{percentage}%"; }
         }
 
         public void HideDownloadProgress()
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(() =>
-                {
-                    downloadPanel.Visible = false;
-                }));
-            }
-            else
-            {
-                downloadPanel.Visible = false;
-            }
+            if (InvokeRequired) Invoke(new Action(() => downloadPanel.Visible = false));
+            else downloadPanel.Visible = false;
+        }
+
+        public void AddToDownloadHistory(string fileName, string filePath)
+        {
+            downloadHistory.Add(new DownloadHistoryItem { FileName = fileName, FilePath = filePath, DownloadDate = DateTime.Now });
+            SaveDownloadHistory();
+            if (InvokeRequired) Invoke(new Action(() => RefreshDownloadHistoryList()));
+            else RefreshDownloadHistoryList();
         }
 
         private void SaveBookmarks()
         {
-            try
-            {
-                var json = JsonSerializer.Serialize(bookmarks, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(bookmarksFilePath, json);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"ブックマークの保存に失敗しました: {ex.Message}");
-            }
+            try { File.WriteAllText(bookmarksFilePath, JsonSerializer.Serialize(bookmarks, new JsonSerializerOptions { WriteIndented = true })); }
+            catch (Exception ex) { MessageBox.Show($"保存失敗: {ex.Message}"); }
         }
 
         private void LoadBookmarks()
@@ -1331,29 +1095,15 @@ namespace Tlmine
             try
             {
                 if (File.Exists(bookmarksFilePath))
-                {
-                    var json = File.ReadAllText(bookmarksFilePath);
-                    bookmarks = JsonSerializer.Deserialize<List<BookmarkItem>>(json) ?? new List<BookmarkItem>();
-                }
+                    bookmarks = JsonSerializer.Deserialize<List<BookmarkItem>>(File.ReadAllText(bookmarksFilePath)) ?? new List<BookmarkItem>();
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"ブックマークの読み込みに失敗しました: {ex.Message}");
-                bookmarks = new List<BookmarkItem>();
-            }
+            catch (Exception ex) { MessageBox.Show($"読み込み失敗: {ex.Message}"); bookmarks = new List<BookmarkItem>(); }
         }
 
         private void SaveExtensions()
         {
-            try
-            {
-                var json = JsonSerializer.Serialize(extensions, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(extensionsFilePath, json);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"拡張機能の保存に失敗しました: {ex.Message}");
-            }
+            try { File.WriteAllText(extensionsFilePath, JsonSerializer.Serialize(extensions, new JsonSerializerOptions { WriteIndented = true })); }
+            catch (Exception ex) { MessageBox.Show($"保存失敗: {ex.Message}"); }
         }
 
         private void LoadExtensions()
@@ -1361,323 +1111,148 @@ namespace Tlmine
             try
             {
                 if (File.Exists(extensionsFilePath))
-                {
-                    var json = File.ReadAllText(extensionsFilePath);
-                    extensions = JsonSerializer.Deserialize<List<ExtensionItem>>(json) ?? new List<ExtensionItem>();
-                }
-                else
-                {
-                    extensions = new List<ExtensionItem>
-                    {
-                        new ExtensionItem { Name = "AdBlocker", Enabled = true },
-                        new ExtensionItem { Name = "Password Manager", Enabled = false }
-                    };
-                }
+                    extensions = JsonSerializer.Deserialize<List<ExtensionItem>>(File.ReadAllText(extensionsFilePath)) ?? new List<ExtensionItem>();
             }
-            catch (Exception ex)
+            catch (Exception ex) { MessageBox.Show($"読み込み失敗: {ex.Message}"); extensions = new List<ExtensionItem>(); }
+        }
+
+        private void SaveDownloadHistory()
+        {
+            try { File.WriteAllText(downloadHistoryFilePath, JsonSerializer.Serialize(downloadHistory, new JsonSerializerOptions { WriteIndented = true })); }
+            catch (Exception ex) { Debug.WriteLine($"保存失敗: {ex.Message}"); }
+        }
+
+        private void LoadDownloadHistory()
+        {
+            try
             {
-                MessageBox.Show($"拡張機能の読み込みに失敗しました: {ex.Message}");
-                extensions = new List<ExtensionItem>();
+                if (File.Exists(downloadHistoryFilePath))
+                    downloadHistory = JsonSerializer.Deserialize<List<DownloadHistoryItem>>(File.ReadAllText(downloadHistoryFilePath)) ?? new List<DownloadHistoryItem>();
             }
+            catch (Exception ex) { Debug.WriteLine($"読み込み失敗: {ex.Message}"); downloadHistory = new List<DownloadHistoryItem>(); }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            foreach (var browser in browsers)
-            {
-                browser.Dispose();
-            }
-
-            if (Cef.IsInitialized ?? false)
-            {
-                Cef.Shutdown();
-            }
-
+            foreach (var browser in browsers) browser.Dispose();
+            if (Cef.IsInitialized ?? false) Cef.Shutdown();
             base.OnFormClosing(e);
         }
 
         private class CustomRequestHandler : IRequestHandler
         {
             private readonly Form1 form;
+            public CustomRequestHandler(Form1 form) { this.form = form; }
 
-            public CustomRequestHandler(Form1 form)
+            public bool OnBeforeBrowse(IWebBrowser chromiumWebBrowser, IBrowser browser, IFrame frame, IRequest request, bool userGesture, bool isRedirect)
             {
-                this.form = form;
-            }
-
-            public bool OnBeforeBrowse(IWebBrowser chromiumWebBrowser, IBrowser browser, IFrame frame, IRequest request,
-                bool userGesture, bool isRedirect)
-            {
-                var url = request.Url;
-                if (url.StartsWith("tlmine://openNewTab"))
+                if (request.Url.StartsWith("tlmine://openNewTab"))
                 {
-                    var uri = new Uri(url);
-                    var query = ParseQueryString(uri.Query);
-                    string openUrl = "https://www.google.com";
-                    if (query.TryGetValue("url", out var value))
-                    {
-                        openUrl = value;
-                    }
-
-                    form.Invoke(new Action(() =>
-                    {
-                        form.AddNewTabFromUrl(openUrl);
-                    }));
-
+                    var uri = new Uri(request.Url);
+                    var query = uri.Query.TrimStart('?').Split('&').Select(p => p.Split('=')).Where(p => p.Length == 2).ToDictionary(p => Uri.UnescapeDataString(p[0]), p => Uri.UnescapeDataString(p[1]));
+                    form.Invoke(new Action(() => form.AddNewTabFromUrl(query.ContainsKey("url") ? query["url"] : "https://www.google.com")));
                     return true;
                 }
                 return false;
             }
 
-            public bool GetAuthCredentials(IWebBrowser chromiumWebBrowser, IBrowser browser, string originUrl,
-                bool isProxy, string host, int port, string realm, string scheme, IAuthCallback callback)
+            public bool GetAuthCredentials(IWebBrowser w, IBrowser b, string o, bool p, string h, int po, string r, string s, IAuthCallback c) => false;
+            public bool OnCertificateError(IWebBrowser w, IBrowser b, CefErrorCode e, string r, ISslInfo s, IRequestCallback c) => false;
+            public void OnPluginCrashed(IWebBrowser w, IBrowser b, string p) { }
+            public void OnRenderProcessTerminated(IWebBrowser w, IBrowser b, CefTerminationStatus s, int e, string m) { if (form.InvokeRequired) form.Invoke(new Action(() => b.Reload())); }
+            public void OnDocumentAvailableInMainFrame(IWebBrowser w, IBrowser b) { }
+            public bool OnOpenUrlFromTab(IWebBrowser w, IBrowser b, IFrame f, string u, WindowOpenDisposition d, bool g)
             {
+                if (d == WindowOpenDisposition.NewBackgroundTab || d == WindowOpenDisposition.NewForegroundTab)
+                {
+                    form.Invoke(new Action(() => form.AddNewTabFromUrl(u)));
+                    return true;
+                }
                 return false;
             }
-
-            public bool OnCertificateError(IWebBrowser chromiumWebBrowser, IBrowser browser, CefErrorCode errorCode,
-                string requestUrl, ISslInfo sslInfo, IRequestCallback callback)
-            {
-                return false;
-            }
-
-            public void OnPluginCrashed(IWebBrowser chromiumWebBrowser, IBrowser browser, string pluginPath) { }
-
-            public void OnRenderProcessTerminated(IWebBrowser chromiumWebBrowser, IBrowser browser,
-                CefTerminationStatus status, int exitCode, string errorMsg)
-            { }
-
-            public void OnDocumentAvailableInMainFrame(IWebBrowser chromiumWebBrowser, IBrowser browser) { }
-
-            public bool OnOpenUrlFromTab(IWebBrowser chromiumWebBrowser, IBrowser browser, IFrame frame,
-                string targetUrl, WindowOpenDisposition targetDisposition, bool userGesture)
-            {
-                return false;
-            }
-
-            public IResponseFilter GetResourceResponseFilter(IWebBrowser chromiumWebBrowser, IBrowser browser,
-                IFrame frame, IRequest request, IResponse response)
-            {
-                return null;
-            }
-
-            public bool OnResourceResponse(IWebBrowser chromiumWebBrowser, IBrowser browser, IFrame frame,
-                IRequest request, IResponse response)
-            {
-                return false;
-            }
-
-            public IResourceRequestHandler GetResourceRequestHandler(IWebBrowser chromiumWebBrowser, IBrowser browser,
-                IFrame frame, IRequest request, bool isNavigation, bool isDownload, string requestInitiator,
-                ref bool disableDefaultHandling)
-            {
-                return null;
-            }
-
-            public bool OnSelectClientCertificate(IWebBrowser chromiumWebBrowser, IBrowser browser,
-                bool isProxy, string host, int port, X509Certificate2Collection certificates,
-                ISelectClientCertificateCallback callback)
-            {
-                return false;
-            }
-
+            public IResponseFilter GetResourceResponseFilter(IWebBrowser w, IBrowser b, IFrame f, IRequest r, IResponse re) => null;
+            public bool OnResourceResponse(IWebBrowser w, IBrowser b, IFrame f, IRequest r, IResponse re) => false;
+            public IResourceRequestHandler GetResourceRequestHandler(IWebBrowser w, IBrowser b, IFrame f, IRequest r, bool n, bool d, string i, ref bool di) => null;
+            public bool OnSelectClientCertificate(IWebBrowser w, IBrowser b, bool p, string h, int po, X509Certificate2Collection c, ISelectClientCertificateCallback ca) => false;
             public void Dispose() { }
-
-            public bool OnQuotaRequest(IWebBrowser chromiumWebBrowser, IBrowser browser, string originUrl,
-                long newSize, IRequestCallback callback)
-            {
-                return false;
-            }
-
-            public void OnRenderViewReady(IWebBrowser chromiumWebBrowser, IBrowser browser) { }
+            public bool OnQuotaRequest(IWebBrowser w, IBrowser b, string o, long n, IRequestCallback c) { c.Continue(true); return true; }
+            public void OnRenderViewReady(IWebBrowser w, IBrowser b) { }
         }
 
         private class CustomDownloadHandler : IDownloadHandler
         {
             private readonly Form1 form;
+            public CustomDownloadHandler(Form1 form) { this.form = form; }
 
-            public CustomDownloadHandler(Form1 form)
+            public bool CanDownload(IWebBrowser w, IBrowser b, string u, string m) => true;
+
+            public bool OnBeforeDownload(IWebBrowser w, IBrowser b, DownloadItem d, IBeforeDownloadCallback c)
             {
-                this.form = form;
-            }
-
-            public bool CanDownload(IWebBrowser chromiumWebBrowser, IBrowser browser, string url, string requestMethod)
-            {
-                return true;
-            }
-
-            public bool OnBeforeDownload(IWebBrowser chromiumWebBrowser, IBrowser browser, DownloadItem downloadItem, IBeforeDownloadCallback callback)
-            {
-                var fileName = downloadItem.SuggestedFileName;
-                var fileSize = downloadItem.TotalBytes > 0 ? $" ({downloadItem.TotalBytes / 1024 / 1024} MB)" : "";
-
-                var result = MessageBox.Show(
-                    $"ファイル '{fileName}'{fileSize} をダウンロードしますか？",
-                    "ダウンロード確認",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
-
-                if (result == DialogResult.Yes)
+                var size = d.TotalBytes > 0 ? $" ({d.TotalBytes / 1024 / 1024} MB)" : "";
+                if (MessageBox.Show($"ファイル '{d.SuggestedFileName}'{size} をダウンロードしますか？", "確認", MessageBoxButtons.YesNo) == DialogResult.Yes)
                 {
-                    var downloadsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-                    var fullPath = Path.Combine(downloadsPath, fileName);
-                    callback.Continue(fullPath, false);
+                    c.Continue(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", d.SuggestedFileName), false);
                     return true;
                 }
-                else
-                {
-                    return false;
-                }
+                return false;
             }
 
-            public void OnDownloadUpdated(IWebBrowser chromiumWebBrowser, IBrowser browser, DownloadItem downloadItem, IDownloadItemCallback callback)
+            public void OnDownloadUpdated(IWebBrowser w, IBrowser b, DownloadItem d, IDownloadItemCallback c)
             {
-                if (downloadItem.IsInProgress)
-                {
-                    var percentage = downloadItem.TotalBytes > 0 ?
-                        (int)((downloadItem.ReceivedBytes * 100) / downloadItem.TotalBytes) : 0;
-                    form.UpdateDownloadProgress(percentage, downloadItem.SuggestedFileName);
-                }
-                else if (downloadItem.IsComplete)
+                if (d.IsInProgress)
+                    form.UpdateDownloadProgress(d.TotalBytes > 0 ? (int)((d.ReceivedBytes * 100) / d.TotalBytes) : 0, d.SuggestedFileName);
+                else if (d.IsComplete)
                 {
                     form.HideDownloadProgress();
-
-                    var result = MessageBox.Show(
-                        $"'{downloadItem.SuggestedFileName}' のダウンロードが完了しました。\nファイルを開きますか？",
-                        "ダウンロード完了",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Information);
-
-                    if (result == DialogResult.Yes)
+                    form.AddToDownloadHistory(d.SuggestedFileName, d.FullPath);
+                    if (MessageBox.Show($"'{d.SuggestedFileName}' のダウンロードが完了しました。\nファイルを開きますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
                     {
-                        try
-                        {
-                            Process.Start(new ProcessStartInfo
-                            {
-                                FileName = downloadItem.FullPath,
-                                UseShellExecute = true
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            MessageBox.Show($"ファイルを開けませんでした: {ex.Message}");
-                        }
+                        try { Process.Start(new ProcessStartInfo { FileName = d.FullPath, UseShellExecute = true }); }
+                        catch (Exception ex) { MessageBox.Show($"開けませんでした: {ex.Message}"); }
                     }
                 }
-                else if (downloadItem.IsCancelled)
-                {
-                    form.HideDownloadProgress();
-                }
+                else if (d.IsCancelled) form.HideDownloadProgress();
             }
         }
-
-        private static Dictionary<string, string> ParseQueryString(string query)
-        {
-            var dict = new Dictionary<string, string>();
-            if (string.IsNullOrEmpty(query)) return dict;
-
-            if (query.StartsWith("?")) query = query.Substring(1);
-
-            foreach (var vp in query.Split('&'))
-            {
-                var parts = vp.Split('=');
-                if (parts.Length == 2)
-                {
-                    dict[Uri.UnescapeDataString(parts[0])] = Uri.UnescapeDataString(parts[1]);
-                }
-            }
-            return dict;
-        }
     }
 
-    public class BookmarkItem
-    {
-        public string Title { get; set; } = "";
-        public string Url { get; set; } = "";
-    }
-
-    public class ExtensionItem
-    {
-        public string Name { get; set; } = "";
-        public bool Enabled { get; set; } = false;
-    }
+    public class BookmarkItem { public string Title { get; set; } = ""; public string Url { get; set; } = ""; }
+    public class ExtensionItem { public string Name { get; set; } = ""; public bool Enabled { get; set; } = false; public string ScriptPath { get; set; } = ""; public string ScriptContent { get; set; } = ""; }
+    public class DownloadHistoryItem { public string FileName { get; set; } = ""; public string FilePath { get; set; } = ""; public DateTime DownloadDate { get; set; } }
 
     public partial class BookmarkDialog : Form
     {
-        private TextBox titleTextBox;
-        private TextBox urlTextBox;
-        private Button okButton;
-        private Button cancelButton;
-
+        private TextBox titleTextBox, urlTextBox;
         public string BookmarkTitle => titleTextBox.Text;
         public string BookmarkUrl => urlTextBox.Text;
 
         public BookmarkDialog(string url, string title)
         {
-            InitializeDialog();
-            urlTextBox.Text = url ?? "";
-            titleTextBox.Text = title ?? "新しいブックマーク";
-        }
+            Text = "ブックマーク追加";
+            Size = new Size(400, 150);
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            BackColor = Color.FromArgb(45, 45, 48);
 
-        private void InitializeDialog()
-        {
-            this.Text = "ブックマーク追加";
-            this.Size = new Size(400, 150);
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.MinimizeBox = false;
+            Controls.Add(new Label { Text = "タイトル:", Location = new Point(12, 15), Size = new Size(60, 23), ForeColor = Color.White });
+            titleTextBox = new TextBox { Location = new Point(78, 12), Size = new Size(300, 23), BackColor = Color.FromArgb(60, 60, 64), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Text = title ?? "" };
+            Controls.Add(titleTextBox);
 
-            var titleLabel = new Label()
-            {
-                Text = "タイトル:",
-                Location = new Point(12, 15),
-                Size = new Size(60, 23)
-            };
-            this.Controls.Add(titleLabel);
+            Controls.Add(new Label { Text = "URL:", Location = new Point(12, 44), Size = new Size(60, 23), ForeColor = Color.White });
+            urlTextBox = new TextBox { Location = new Point(78, 41), Size = new Size(300, 23), BackColor = Color.FromArgb(60, 60, 64), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Text = url ?? "" };
+            Controls.Add(urlTextBox);
 
-            titleTextBox = new TextBox()
-            {
-                Location = new Point(78, 12),
-                Size = new Size(300, 23)
-            };
-            this.Controls.Add(titleTextBox);
+            var okBtn = new Button { Text = "OK", Location = new Point(222, 80), Size = new Size(75, 23), DialogResult = DialogResult.OK, BackColor = Color.FromArgb(70, 130, 180), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+            okBtn.FlatAppearance.BorderSize = 0;
+            Controls.Add(okBtn);
 
-            var urlLabel = new Label()
-            {
-                Text = "URL:",
-                Location = new Point(12, 44),
-                Size = new Size(60, 23)
-            };
-            this.Controls.Add(urlLabel);
+            var cancelBtn = new Button { Text = "キャンセル", Location = new Point(303, 80), Size = new Size(75, 23), DialogResult = DialogResult.Cancel, BackColor = Color.FromArgb(80, 80, 84), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+            cancelBtn.FlatAppearance.BorderSize = 0;
+            Controls.Add(cancelBtn);
 
-            urlTextBox = new TextBox()
-            {
-                Location = new Point(78, 41),
-                Size = new Size(300, 23)
-            };
-            this.Controls.Add(urlTextBox);
-
-            okButton = new Button()
-            {
-                Text = "OK",
-                Location = new Point(222, 80),
-                Size = new Size(75, 23),
-                DialogResult = DialogResult.OK
-            };
-            this.Controls.Add(okButton);
-
-            cancelButton = new Button()
-            {
-                Text = "キャンセル",
-                Location = new Point(303, 80),
-                Size = new Size(75, 23),
-                DialogResult = DialogResult.Cancel
-            };
-            this.Controls.Add(cancelButton);
-
-            this.AcceptButton = okButton;
-            this.CancelButton = cancelButton;
+            AcceptButton = okBtn;
+            CancelButton = cancelBtn;
         }
     }
 }
