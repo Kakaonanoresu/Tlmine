@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
+using System.IO.Compression;
 
 namespace Tlmine
 {
@@ -35,6 +36,7 @@ namespace Tlmine
         private Button forwardButton;
         private Button reloadButton;
         private Button addBookmarkButton;
+        private Button translateButton;
         private ProgressBar downloadProgressBar;
         private Label downloadLabel;
         private Panel downloadPanel;
@@ -50,6 +52,7 @@ namespace Tlmine
         private const string bookmarksFilePath = "bookmarks.json";
         private const string extensionsFilePath = "extensions.json";
         private const string downloadHistoryFilePath = "download_history.json";
+        private System.Windows.Forms.Timer updateTimer;
 
         public Form1()
         {
@@ -60,6 +63,22 @@ namespace Tlmine
             InitializeUI();
             InitializeChromium();
             AddNewTab("https://www.google.com");
+            InitializeUpdateTimer();
+        }
+
+        private void InitializeUpdateTimer()
+        {
+            updateTimer = new System.Windows.Forms.Timer();
+            updateTimer.Interval = 500;
+            updateTimer.Tick += (s, e) =>
+            {
+                var currentBrowser = browsers.FirstOrDefault(b => b.Visible);
+                if (currentBrowser != null && !searchBar.Focused)
+                {
+                    UpdateNavigationButtons();
+                }
+            };
+            updateTimer.Start();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -326,18 +345,62 @@ namespace Tlmine
             addExtensionBtn.FlatAppearance.BorderSize = 0;
             addExtensionBtn.Click += (s, e) =>
             {
-                using (var dialog = new OpenFileDialog { Filter = "JavaScript Files (*.js)|*.js", Title = "拡張機能スクリプトを選択" })
+                using (var dialog = new OpenFileDialog { Filter = "拡張機能ファイル (*.js;*.crx)|*.js;*.crx", Title = "拡張機能を選択" })
                 {
                     if (dialog.ShowDialog() == DialogResult.OK)
                     {
                         try
                         {
-                            var scriptContent = File.ReadAllText(dialog.FileName);
+                            string ext = Path.GetExtension(dialog.FileName).ToLower();
+                            string scriptContent = "";
+                            string name = Path.GetFileNameWithoutExtension(dialog.FileName);
 
-                            // ⭐ セキュリティ警告を表示
+                            if (ext == ".crx")
+                            {
+                                var extractPath = Path.Combine(Path.GetTempPath(), "TlmineExt_" + Guid.NewGuid().ToString());
+                                Directory.CreateDirectory(extractPath);
+
+                                using (var fs = File.OpenRead(dialog.FileName))
+                                {
+                                    fs.Seek(16, SeekOrigin.Begin);
+                                    using (var zip = new ZipArchive(fs, ZipArchiveMode.Read))
+                                    {
+                                        zip.ExtractToDirectory(extractPath);
+                                    }
+                                }
+
+                                var manifestPath = Path.Combine(extractPath, "manifest.json");
+                                if (File.Exists(manifestPath))
+                                {
+                                    try
+                                    {
+                                        var manifest = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(manifestPath));
+                                        if (manifest != null && manifest.ContainsKey("name"))
+                                            name = manifest["name"].ToString();
+                                    }
+                                    catch { }
+                                }
+
+                                var jsFiles = Directory.GetFiles(extractPath, "*.js", SearchOption.AllDirectories);
+                                if (jsFiles.Length > 0)
+                                {
+                                    scriptContent = File.ReadAllText(jsFiles[0]);
+                                }
+                            }
+                            else
+                            {
+                                scriptContent = File.ReadAllText(dialog.FileName);
+                            }
+
+                            if (string.IsNullOrEmpty(scriptContent))
+                            {
+                                MessageBox.Show("実行可能なスクリプトが見つかりませんでした。", "エラー");
+                                return;
+                            }
+
                             var result = MessageBox.Show(
                                 $"⚠️ セキュリティ警告\n\n" +
-                                $"拡張機能 '{Path.GetFileNameWithoutExtension(dialog.FileName)}' を追加しようとしています。\n\n" +
+                                $"拡張機能 '{name}' を追加しようとしています。\n\n" +
                                 "拡張機能は任意のJavaScriptコードを実行できるため、\n" +
                                 "信頼できない送信元からのファイルは危険です。\n\n" +
                                 "このファイルを信頼して追加しますか？",
@@ -350,7 +413,7 @@ namespace Tlmine
                             {
                                 var newExt = new ExtensionItem
                                 {
-                                    Name = Path.GetFileNameWithoutExtension(dialog.FileName),
+                                    Name = name,
                                     Enabled = true,
                                     ScriptPath = dialog.FileName,
                                     ScriptContent = scriptContent
@@ -618,7 +681,7 @@ namespace Tlmine
             downloadPanel.Controls.Add(downloadProgressBar);
             downloadPanel.Controls.Add(downloadLabel);
 
-            var navPanel = new Panel() { Dock = DockStyle.Right, Width = 160, BackColor = Color.FromArgb(45, 45, 48) };
+            var navPanel = new Panel() { Dock = DockStyle.Right, Width = 200, BackColor = Color.FromArgb(45, 45, 48) };
             searchBarPanel.Controls.Add(navPanel);
             searchBarPanel.Controls.Add(downloadPanel);
 
@@ -640,6 +703,29 @@ namespace Tlmine
             addBookmarkButton.FlatAppearance.BorderSize = 0;
             addBookmarkButton.Click += AddBookmarkBtn_Click;
 
+            translateButton = new Button()
+            {
+                Text = "🌐",
+                Width = 35,
+                Height = 28,
+                Left = 156,
+                Top = 2,
+                BackColor = Color.FromArgb(60, 60, 64),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold)
+            };
+            translateButton.FlatAppearance.BorderSize = 0;
+            translateButton.Click += (s, e) =>
+            {
+                var browser = browsers.FirstOrDefault(b => b.Visible);
+                if (browser != null && !string.IsNullOrEmpty(browser.Address))
+                {
+                    string translateUrl = $"https://translate.google.com/translate?sl=auto&tl=ja&u={Uri.EscapeDataString(browser.Address)}";
+                    browser.Load(translateUrl);
+                }
+            };
+
             backButton.Click += (s, e) => browsers.FirstOrDefault(b => b.Visible)?.Back();
             forwardButton.Click += (s, e) => browsers.FirstOrDefault(b => b.Visible)?.Forward();
             reloadButton.Click += (s, e) => browsers.FirstOrDefault(b => b.Visible)?.Reload();
@@ -648,6 +734,7 @@ namespace Tlmine
             navPanel.Controls.Add(forwardButton);
             navPanel.Controls.Add(reloadButton);
             navPanel.Controls.Add(addBookmarkButton);
+            navPanel.Controls.Add(translateButton);
 
             downloadPanel.Left = navPanel.Left - downloadPanel.Width - 10;
             downloadPanel.Top = 4;
@@ -772,19 +859,16 @@ namespace Tlmine
             return false;
         }
 
-        // ⭐ セキュリティ: URL検証メソッド
         private bool IsValidUrl(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return false;
 
-            // httpまたはhttpsのみ許可
             if (!url.StartsWith("http://") && !url.StartsWith("https://"))
                 return false;
 
             try
             {
                 var uri = new Uri(url);
-                // ローカルホストやファイルプロトコルをブロック
                 if (uri.IsLoopback || uri.IsFile)
                     return false;
 
@@ -824,21 +908,10 @@ namespace Tlmine
             var browser = browsers.FirstOrDefault(b => b.Visible);
             if (browser != null)
             {
-                if (InvokeRequired)
-                    Invoke(new Action(() =>
-                    {
-                        backButton.Enabled = browser.CanGoBack;
-                        forwardButton.Enabled = browser.CanGoForward;
-                        backButton.ForeColor = browser.CanGoBack ? Color.White : Color.Gray;
-                        forwardButton.ForeColor = browser.CanGoForward ? Color.White : Color.Gray;
-                    }));
-                else
-                {
-                    backButton.Enabled = browser.CanGoBack;
-                    forwardButton.Enabled = browser.CanGoForward;
-                    backButton.ForeColor = browser.CanGoBack ? Color.White : Color.Gray;
-                    forwardButton.ForeColor = browser.CanGoForward ? Color.White : Color.Gray;
-                }
+                backButton.Enabled = browser.CanGoBack;
+                forwardButton.Enabled = browser.CanGoForward;
+                backButton.ForeColor = browser.CanGoBack ? Color.White : Color.Gray;
+                forwardButton.ForeColor = browser.CanGoForward ? Color.White : Color.Gray;
             }
         }
 
@@ -854,33 +927,42 @@ namespace Tlmine
 
         private void InitializeChromium()
         {
-            if (!(Cef.IsInitialized ?? false))
+            bool isInitialized = Cef.IsInitialized ?? false;
+            if (isInitialized)
             {
-                var settings = new CefSettings();
-                var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tlmine");
-                Directory.CreateDirectory(appData);
-                settings.RootCachePath = appData;
-                settings.CachePath = Path.Combine(appData, "Cache");
-                settings.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-                settings.CefCommandLineArgs.Add("disable-gpu-vsync");
-                settings.CefCommandLineArgs.Add("disable-background-timer-throttling");
-                settings.CefCommandLineArgs.Add("disable-backgrounding-occluded-windows");
-                settings.CefCommandLineArgs.Add("disable-renderer-backgrounding");
-                settings.CefCommandLineArgs.Add("disable-blink-features", "AutomationControlled");
-                settings.CefCommandLineArgs.Add("enable-media-stream");
-                settings.CefCommandLineArgs.Add("autoplay-policy", "no-user-gesture-required");
-                settings.CefCommandLineArgs.Add("enable-proprietary-codecs");
-                settings.CefCommandLineArgs.Add("enable-gpu-rasterization");
-                settings.CefCommandLineArgs.Add("enable-zero-copy");
-                settings.CefCommandLineArgs.Add("enable-webgl");
-
-                settings.PersistSessionCookies = true;
-                settings.MultiThreadedMessageLoop = true;
-                settings.LogSeverity = LogSeverity.Disable;
-
-                Cef.Initialize(settings);
+                return;
             }
+
+            var settings = new CefSettings();
+            var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tlmine");
+            Directory.CreateDirectory(appData);
+            settings.RootCachePath = appData;
+            settings.CachePath = Path.Combine(appData, "Cache");
+            settings.BrowserSubprocessPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CefSharp.BrowserSubprocess.exe");
+            settings.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+            settings.Locale = "ja";
+            settings.AcceptLanguageList = "ja-JP,ja,en-US,en";
+
+            settings.CefCommandLineArgs.Add("disable-gpu-vsync");
+            settings.CefCommandLineArgs.Add("disable-background-timer-throttling");
+            settings.CefCommandLineArgs.Add("disable-backgrounding-occluded-windows");
+            settings.CefCommandLineArgs.Add("disable-renderer-backgrounding");
+            settings.CefCommandLineArgs.Add("disable-blink-features", "AutomationControlled");
+            settings.CefCommandLineArgs.Add("enable-media-stream");
+            settings.CefCommandLineArgs.Add("autoplay-policy", "no-user-gesture-required");
+            settings.CefCommandLineArgs.Add("enable-proprietary-codecs");
+            settings.CefCommandLineArgs.Add("enable-gpu-rasterization");
+            settings.CefCommandLineArgs.Add("enable-zero-copy");
+            settings.CefCommandLineArgs.Add("enable-webgl");
+            settings.CefCommandLineArgs.Add("enable-features", "NetworkService,NetworkServiceInProcess");
+            settings.CefCommandLineArgs.Add("enable-widevine-cdm");
+            settings.CefCommandLineArgs.Add("lang", "ja-JP");
+
+            settings.PersistSessionCookies = true;
+            settings.MultiThreadedMessageLoop = true;
+            settings.LogSeverity = LogSeverity.Disable;
+
+            Cef.Initialize(settings, performDependencyCheck: false, browserProcessHandler: null);
         }
 
         private void AddNewTab(string url)
@@ -893,18 +975,25 @@ namespace Tlmine
                 DownloadHandler = new CustomDownloadHandler(this)
             };
 
-            browser.FrameLoadEnd += (s, e) => { if (e.Frame.IsMain) { UpdateNavigationButtons(); InjectExtensions(browser); } };
+            browser.FrameLoadEnd += (s, e) =>
+            {
+                if (e.Frame.IsMain)
+                {
+                    InjectExtensions(browser);
+                    InjectJapaneseFontFix(browser);
+                }
+            };
+
             browser.TitleChanged += Browser_TitleChanged;
             browser.AddressChanged += (s, e) =>
             {
-                if (browser.Visible)
+                if (browser.Visible && !searchBar.Focused)
                 {
                     if (InvokeRequired)
-                        Invoke(new Action(() => { if (!searchBar.Focused) { searchBar.Text = e.Address; searchBar.ForeColor = Color.White; } UpdateNavigationButtons(); }));
-                    else { if (!searchBar.Focused) { searchBar.Text = e.Address; searchBar.ForeColor = Color.White; } UpdateNavigationButtons(); }
+                        Invoke(new Action(() => { searchBar.Text = e.Address; searchBar.ForeColor = Color.White; }));
+                    else { searchBar.Text = e.Address; searchBar.ForeColor = Color.White; }
                 }
             };
-            browser.LoadingStateChanged += (s, e) => UpdateNavigationButtons();
 
             browsers.Add(browser);
             Controls.Add(browser);
@@ -961,9 +1050,29 @@ namespace Tlmine
             CreateDefaultIcon(tabBtn);
         }
 
+        private void InjectJapaneseFontFix(ChromiumWebBrowser browser)
+        {
+            if (browser == null) return;
+            try
+            {
+                string script = @"
+(function() {
+    if(document.documentElement.lang === '' || !document.documentElement.lang) {
+        document.documentElement.lang = 'ja';
+    }
+})();";
+                browser.GetMainFrame()?.EvaluateScriptAsync(script);
+            }
+            catch { }
+        }
+
         private void CloseTab(ChromiumWebBrowser browserToClose)
         {
-            if (browsers.Count <= 1) { MessageBox.Show("最後のタブは閉じることができません。", "情報"); return; }
+            if (browsers.Count <= 1)
+            {
+                Application.Exit();
+                return;
+            }
 
             bool wasSelected = browserToClose.Visible;
             Panel tabContainer = null;
@@ -985,7 +1094,18 @@ namespace Tlmine
 
             browsers.Remove(browserToClose);
             Controls.Remove(browserToClose);
-            browserToClose.Dispose();
+
+            Task.Delay(100).ContinueWith(_ =>
+            {
+                try
+                {
+                    if (InvokeRequired)
+                        Invoke(new Action(() => browserToClose.Dispose()));
+                    else
+                        browserToClose.Dispose();
+                }
+                catch { }
+            });
 
             if (wasSelected && browsers.Count > 0)
             {
@@ -1082,7 +1202,14 @@ namespace Tlmine
 
         private void SelectTab(ChromiumWebBrowser browser, Panel tabContainer)
         {
-            foreach (var b in browsers) b.Visible = false;
+            foreach (var b in browsers)
+            {
+                if (b != browser && b.Visible)
+                {
+                    b.Visible = false;
+                }
+            }
+
             foreach (Panel container in tabButtonsPanel.Controls.OfType<Panel>())
             {
                 container.BackColor = Color.FromArgb(70, 70, 70);
@@ -1175,12 +1302,27 @@ namespace Tlmine
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            foreach (var browser in browsers) browser.Dispose();
-            if (Cef.IsInitialized ?? false) Cef.Shutdown();
+            updateTimer?.Stop();
+            updateTimer?.Dispose();
+
+            foreach (var browser in browsers.ToList())
+            {
+                try
+                {
+                    browser.Dispose();
+                }
+                catch { }
+            }
+
+            bool isInitialized = Cef.IsInitialized ?? false;
+            if (isInitialized)
+            {
+                Cef.Shutdown();
+            }
+
             base.OnFormClosing(e);
         }
 
-        // ⭐ セキュリティ強化: CustomRequestHandler
         private class CustomRequestHandler : IRequestHandler
         {
             private readonly Form1 form;
@@ -1190,11 +1332,10 @@ namespace Tlmine
             {
                 if (request.Url.StartsWith("tlmine://openNewTab"))
                 {
-                    // ⭐ ユーザーの明示的な操作かチェック
                     if (!userGesture)
                     {
                         Debug.WriteLine("自動実行された tlmine:// プロトコルをブロックしました");
-                        return true; // ブロック
+                        return true;
                     }
 
                     var uri = new Uri(request.Url);
@@ -1206,7 +1347,6 @@ namespace Tlmine
                     {
                         string targetUrl = query["url"];
 
-                        // ⭐ URLの検証
                         if (!form.IsValidUrl(targetUrl))
                         {
                             form.Invoke(new Action(() =>
@@ -1215,7 +1355,6 @@ namespace Tlmine
                             return true;
                         }
 
-                        // ⭐ 確認ダイアログを表示
                         var result = DialogResult.No;
                         form.Invoke(new Action(() =>
                         {
@@ -1242,10 +1381,8 @@ namespace Tlmine
 
             public bool GetAuthCredentials(IWebBrowser w, IBrowser b, string o, bool p, string h, int po, string r, string s, IAuthCallback c) => false;
 
-            // ⭐ セキュリティ: SSL証明書エラーの処理
             public bool OnCertificateError(IWebBrowser w, IBrowser b, CefErrorCode e, string r, ISslInfo s, IRequestCallback c)
             {
-                // 証明書エラーを検出したら警告を表示
                 form.Invoke(new Action(() =>
                 {
                     var result = MessageBox.Show(
@@ -1260,17 +1397,10 @@ namespace Tlmine
                         MessageBoxIcon.Warning
                     );
 
-                    if (result == DialogResult.Yes)
-                    {
-                        c.Continue(true);
-                    }
-                    else
-                    {
-                        c.Continue(false);
-                    }
+                    c.Continue(result == DialogResult.Yes);
                 }));
 
-                return true; // エラーを処理済みとしてマーク
+                return true;
             }
 
             public void OnPluginCrashed(IWebBrowser w, IBrowser b, string p) { }
@@ -1278,11 +1408,13 @@ namespace Tlmine
             {
                 if (form.InvokeRequired)
                     form.Invoke(new Action(() => b.Reload()));
+                else
+                    b.Reload();
             }
             public void OnDocumentAvailableInMainFrame(IWebBrowser w, IBrowser b) { }
             public bool OnOpenUrlFromTab(IWebBrowser w, IBrowser b, IFrame f, string u, WindowOpenDisposition d, bool g)
             {
-                if (d == WindowOpenDisposition.NewBackgroundTab || d == WindowOpenDisposition.NewForegroundTab)
+                if (d == WindowOpenDisposition.NewBackgroundTab || d == WindowOpenDisposition.NewForegroundTab || d == WindowOpenDisposition.NewWindow || d == WindowOpenDisposition.NewPopup)
                 {
                     form.Invoke(new Action(() => form.AddNewTabFromUrl(u)));
                     return true;
@@ -1298,16 +1430,19 @@ namespace Tlmine
             public void OnRenderViewReady(IWebBrowser w, IBrowser b) { }
         }
 
-        // ⭐ セキュリティ強化: CustomDownloadHandler
         private class CustomDownloadHandler : IDownloadHandler
         {
             private readonly Form1 form;
+            private Dictionary<int, string> downloadFileNames = new Dictionary<int, string>();
+
             public CustomDownloadHandler(Form1 form) { this.form = form; }
 
             public bool CanDownload(IWebBrowser w, IBrowser b, string u, string m) => true;
 
             public bool OnBeforeDownload(IWebBrowser w, IBrowser b, DownloadItem d, IBeforeDownloadCallback c)
             {
+                downloadFileNames[d.Id] = d.SuggestedFileName;
+
                 var size = d.TotalBytes > 0 ? $" ({d.TotalBytes / 1024 / 1024} MB)" : "";
                 if (MessageBox.Show($"ファイル '{d.SuggestedFileName}'{size} をダウンロードしますか？", "確認", MessageBoxButtons.YesNo) == DialogResult.Yes)
                 {
@@ -1319,14 +1454,17 @@ namespace Tlmine
 
             public void OnDownloadUpdated(IWebBrowser w, IBrowser b, DownloadItem d, IDownloadItemCallback c)
             {
+                string fileName = downloadFileNames.ContainsKey(d.Id) ? downloadFileNames[d.Id] : d.SuggestedFileName;
+
                 if (d.IsInProgress)
-                    form.UpdateDownloadProgress(d.TotalBytes > 0 ? (int)((d.ReceivedBytes * 100) / d.TotalBytes) : 0, d.SuggestedFileName);
+                {
+                    form.UpdateDownloadProgress(d.TotalBytes > 0 ? (int)((d.ReceivedBytes * 100) / d.TotalBytes) : 0, fileName);
+                }
                 else if (d.IsComplete)
                 {
                     form.HideDownloadProgress();
-                    form.AddToDownloadHistory(d.SuggestedFileName, d.FullPath);
+                    form.AddToDownloadHistory(fileName, d.FullPath);
 
-                    // ⭐ セキュリティ: 実行可能ファイルの場合は警告を強化
                     string ext = Path.GetExtension(d.FullPath).ToLower();
                     string[] dangerousExts = { ".exe", ".msi", ".bat", ".cmd", ".vbs", ".js", ".ps1", ".scr", ".com", ".pif" };
 
@@ -1334,7 +1472,7 @@ namespace Tlmine
                     {
                         var result = MessageBox.Show(
                             $"⚠️ セキュリティ警告\n\n" +
-                            $"実行可能ファイル '{d.SuggestedFileName}' のダウンロードが完了しました。\n\n" +
+                            $"実行可能ファイル '{fileName}' のダウンロードが完了しました。\n\n" +
                             $"このファイルはコンピュータに害を及ぼす可能性があります。\n" +
                             $"信頼できる送信元からのファイルのみ開いてください。\n\n" +
                             $"ファイルを開きますか？",
@@ -1351,22 +1489,46 @@ namespace Tlmine
                     }
                     else
                     {
-                        // 通常のファイルは既存の処理
-                        if (MessageBox.Show($"'{d.SuggestedFileName}' のダウンロードが完了しました。\nファイルを開きますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                        if (MessageBox.Show($"'{fileName}' のダウンロードが完了しました。\nファイルを開きますか？", "完了", MessageBoxButtons.YesNo) == DialogResult.Yes)
                         {
                             try { Process.Start(new ProcessStartInfo { FileName = d.FullPath, UseShellExecute = true }); }
                             catch (Exception ex) { MessageBox.Show($"開けませんでした: {ex.Message}", "エラー"); }
                         }
                     }
+
+                    if (downloadFileNames.ContainsKey(d.Id))
+                        downloadFileNames.Remove(d.Id);
                 }
-                else if (d.IsCancelled) form.HideDownloadProgress();
+                else if (d.IsCancelled)
+                {
+                    form.HideDownloadProgress();
+                    if (downloadFileNames.ContainsKey(d.Id))
+                        downloadFileNames.Remove(d.Id);
+                }
             }
         }
     }
 
-    public class BookmarkItem { public string Title { get; set; } = ""; public string Url { get; set; } = ""; }
-    public class ExtensionItem { public string Name { get; set; } = ""; public bool Enabled { get; set; } = false; public string ScriptPath { get; set; } = ""; public string ScriptContent { get; set; } = ""; }
-    public class DownloadHistoryItem { public string FileName { get; set; } = ""; public string FilePath { get; set; } = ""; public DateTime DownloadDate { get; set; } }
+    public class BookmarkItem
+    {
+        public string Title { get; set; } = "";
+        public string Url { get; set; } = "";
+    }
+
+    public class ExtensionItem
+    {
+        public string Name { get; set; } = "";
+        public bool Enabled { get; set; } = false;
+        public string ScriptPath { get; set; } = "";
+        public string ScriptContent { get; set; } = "";
+    }
+
+    public class DownloadHistoryItem
+    {
+        public string FileName { get; set; } = "";
+        public string FilePath { get; set; } = "";
+        public DateTime DownloadDate { get; set; }
+    }
 
     public partial class BookmarkDialog : Form
     {
